@@ -18,16 +18,80 @@ class ApiException implements Exception {
 
 /// Logged-in user (subset of the backend's publicUser).
 class AccountUser {
-  AccountUser({required this.id, required this.email, this.name});
+  AccountUser({required this.id, required this.email, this.name, this.accountToken});
 
-  factory AccountUser.fromJson(Map<String, dynamic> j) =>
-      AccountUser(id: j['id'] as int, email: j['email'] as String, name: j['name'] as String?);
+  factory AccountUser.fromJson(Map<String, dynamic> j) => AccountUser(
+      id: j['id'] as int,
+      email: j['email'] as String,
+      name: j['name'] as String?,
+      accountToken: j['accountToken'] as String?);
 
   final int id;
   final String email;
   final String? name;
 
-  Map<String, dynamic> toJson() => {'id': id, 'email': email, 'name': name};
+  /// Sent to Google Play / Apple with a purchase, so renewals reach this account.
+  final String? accountToken;
+
+  Map<String, dynamic> toJson() => {'id': id, 'email': email, 'name': name, 'accountToken': accountToken};
+}
+
+/// Whether the user may use the app: free trial or paid Pro (backend `entitlement`).
+class Entitlement {
+  Entitlement({
+    required this.isPro,
+    required this.isTrial,
+    this.source,
+    this.productId,
+    this.expiresAt,
+    this.autoRenew = false,
+    this.trialUsed = false,
+    this.trialEndsAt,
+  });
+
+  factory Entitlement.fromJson(Map<String, dynamic> j) {
+    DateTime? date(Object? v) => v is String ? DateTime.tryParse(v)?.toLocal() : null;
+    final trial = j['trial'] is Map ? j['trial'] as Map<String, dynamic> : const <String, dynamic>{};
+    return Entitlement(
+      isPro: j['isPro'] == true,
+      isTrial: j['isTrial'] == true || j['source'] == 'trial',
+      source: j['source'] as String?,
+      productId: j['productId'] as String?,
+      expiresAt: date(j['expiresAt']),
+      autoRenew: j['autoRenew'] == true,
+      trialUsed: trial['used'] == true,
+      trialEndsAt: date(trial['endsAt']),
+    );
+  }
+
+  final bool isPro;
+  final bool isTrial;
+  final String? source; // google | apple | admin | trial
+  final String? productId;
+  final DateTime? expiresAt; // null = lifetime
+  final bool autoRenew;
+  final bool trialUsed;
+  final DateTime? trialEndsAt;
+
+  /// True while the trial or subscription lasts (also checked offline from the saved copy).
+  bool get active => isPro && (expiresAt == null || expiresAt!.isAfter(DateTime.now()));
+
+  /// Whole days left (rounded up), or null for lifetime.
+  int? get daysLeft {
+    if (expiresAt == null) return null;
+    final left = expiresAt!.difference(DateTime.now());
+    return left.isNegative ? 0 : (left.inHours / 24).ceil();
+  }
+
+  Map<String, dynamic> toJson() => {
+        'isPro': isPro,
+        'isTrial': isTrial,
+        'source': source,
+        'productId': productId,
+        'expiresAt': expiresAt?.toUtc().toIso8601String(),
+        'autoRenew': autoRenew,
+        'trial': {'used': trialUsed, 'endsAt': trialEndsAt?.toUtc().toIso8601String()},
+      };
 }
 
 /// Talks to the Abhi Utility backend and keeps the login tokens.
@@ -46,6 +110,7 @@ class ApiClient {
   static const _kAccess = 'account:access';
   static const _kRefresh = 'account:refresh';
   static const _kUser = 'account:user';
+  static const _kEntitlement = 'account:entitlement';
 
   String? _access;
   String? _refresh;
@@ -53,6 +118,12 @@ class ApiClient {
 
   /// The logged-in user, or null. Widgets listen to this.
   final user = ValueNotifier<AccountUser?>(null);
+
+  /// Free trial / Pro status of the logged-in user (null = logged out or not known yet).
+  final entitlement = ValueNotifier<Entitlement?>(null);
+
+  /// May the features be used right now?
+  bool get hasAccess => isLoggedIn && (entitlement.value?.active ?? false);
 
   bool get isLoggedIn => _refresh != null;
 
@@ -64,6 +135,12 @@ class ApiClient {
     final raw = prefs.getString(_kUser);
     if (_refresh != null && raw != null) {
       user.value = AccountUser.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      final ent = prefs.getString(_kEntitlement);
+      if (ent != null) {
+        try {
+          entitlement.value = Entitlement.fromJson(jsonDecode(ent) as Map<String, dynamic>);
+        } catch (_) {/* old format: fetched again by refreshAccount */}
+      }
     }
     _loaded = true;
   }
@@ -79,6 +156,30 @@ class ApiClient {
       await prefs.setString(_kUser, jsonEncode(u.toJson()));
       user.value = u;
     }
+    if (j['entitlement'] is Map) await setEntitlement(j['entitlement'] as Map<String, dynamic>);
+  }
+
+  /// Saves the entitlement from any backend answer (`/me`, login, purchases).
+  Future<void> setEntitlement(Map<String, dynamic> j) async {
+    final e = Entitlement.fromJson(j);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kEntitlement, jsonEncode(e.toJson()));
+    entitlement.value = e;
+  }
+
+  /// Reloads the user and their trial / subscription status from the server.
+  /// Offline: keeps the saved status.
+  Future<void> refreshAccount() async {
+    await load();
+    if (!isLoggedIn) return;
+    final j = await json('GET', '/api/v1/me');
+    if (j['user'] is Map) {
+      final prefs = await SharedPreferences.getInstance();
+      final u = AccountUser.fromJson(j['user'] as Map<String, dynamic>);
+      await prefs.setString(_kUser, jsonEncode(u.toJson()));
+      user.value = u;
+    }
+    if (j['entitlement'] is Map) await setEntitlement(j['entitlement'] as Map<String, dynamic>);
   }
 
   Future<void> _clearSession() async {
@@ -86,23 +187,29 @@ class ApiClient {
     await prefs.remove(_kAccess);
     await prefs.remove(_kRefresh);
     await prefs.remove(_kUser);
+    await prefs.remove(_kEntitlement);
     _access = null;
     _refresh = null;
     user.value = null;
+    entitlement.value = null;
   }
 
   // ---- Auth -------------------------------------------------------------------------
 
-  Future<void> register({required String email, required String password, String? name}) async {
+  /// Creates the account; returns true when the free trial started.
+  Future<bool> register({required String email, required String password, String? name}) async {
     final j = await _send('POST', '/api/v1/auth/register',
         body: {'email': email, 'password': password, if (name != null && name.isNotEmpty) 'name': name},
         auth: false);
     await _saveSession(j);
+    return j['trialStarted'] == true;
   }
 
-  Future<void> login({required String email, required String password}) async {
+  /// Logs in; returns true when the free trial started (older accounts).
+  Future<bool> login({required String email, required String password}) async {
     final j = await _send('POST', '/api/v1/auth/login', body: {'email': email, 'password': password}, auth: false);
     await _saveSession(j);
+    return j['trialStarted'] == true;
   }
 
   /// Emails a 6-digit reset code.
@@ -145,6 +252,9 @@ class ApiClient {
   /// JSON request. With [auth], sends the access token and refreshes it once on 401.
   Future<Map<String, dynamic>> json(String method, String path, {Object? body}) =>
       _send(method, path, body: body, auth: true);
+
+  /// GET that needs no login (e.g. `/api/v1/plans`).
+  Future<Map<String, dynamic>> publicJson(String path) => _send('GET', path, auth: false);
 
   /// Raw bytes upload (backup photos).
   Future<Map<String, dynamic>> putBytes(String path, Uint8List bytes) =>

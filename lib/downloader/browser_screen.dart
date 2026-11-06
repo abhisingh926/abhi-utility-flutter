@@ -183,6 +183,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: MediaOptionsList(
                     options: r.options,
+                    streamed: r.streamingOnly,
                     onDownload: (o) async {
                       Navigator.pop(context);
                       await _download(r, o, userAgent);

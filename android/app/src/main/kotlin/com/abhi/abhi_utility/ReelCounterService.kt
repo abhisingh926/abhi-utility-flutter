@@ -346,7 +346,8 @@ class ReelCounterService : AccessibilityService() {
                     val source = anyForegroundPkg
                     startActivity(
                         Intent(this@ReelCounterService, QuickDownloadActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            // Always a fresh panel: never bring back an old one with the previous link.
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                             .putExtra(QuickDownloadActivity.EXTRA_PAGE_URL, readBrowserAddress(source))
                             .putExtra(QuickDownloadActivity.EXTRA_SOURCE_APP, appLabel(source))
                     )

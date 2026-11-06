@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../account/api_client.dart';
 import 'ad_block.dart' show siteOf;
 import 'link_history.dart';
 import 'media_finder.dart';
@@ -52,7 +53,20 @@ class _QuickPanelState extends State<_QuickPanel> {
   String? _confirm;
   String? _confirmLink;
 
+  /// No free trial / subscription: the panel only offers to open the app.
+  bool _locked = false;
+
   Future<void> _start() async {
+    // Uses the saved status, so this works offline too (main app refreshes it).
+    await ApiClient.instance.load();
+    if (!ApiClient.instance.hasAccess) {
+      setState(() {
+        _locked = true;
+        _loading = false;
+      });
+      return;
+    }
+
     // 1. "Share → Abhi Utility": the link is exactly what the user shared.
     final shared = await _channel.invokeMethod<String>('sharedText');
     if (shared != null && extractUrl(shared) != null) return _run(shared);
@@ -237,6 +251,26 @@ class _QuickPanelState extends State<_QuickPanel> {
   }
 
   Widget _body(ColorScheme scheme) {
+    if (_locked) {
+      final loggedIn = ApiClient.instance.isLoggedIn;
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            leading: Icon(Icons.lock_outline, color: scheme.error),
+            title: Text(loggedIn ? 'Your free trial has ended' : 'Register to get 1 month free'),
+            subtitle: Text(loggedIn
+                ? 'Subscribe in Abhi Utility to keep downloading.'
+                : 'Create a free account in Abhi Utility to unlock the downloader.'),
+          ),
+          FilledButton(
+            onPressed: () => _channel.invokeMethod('openApp', {'text': _link ?? ''}),
+            child: const Text('Open Abhi Utility'),
+          ),
+        ],
+      );
+    }
     if (_started != null) {
       return ListTile(
         leading: const Icon(Icons.check_circle, color: Colors.green),
@@ -308,7 +342,7 @@ class _QuickPanelState extends State<_QuickPanel> {
       );
     }
     return SingleChildScrollView(
-      child: MediaOptionsList(options: r.options, onDownload: _download),
+      child: MediaOptionsList(options: r.options, onDownload: _download, streamed: r.streamingOnly),
     );
   }
 }

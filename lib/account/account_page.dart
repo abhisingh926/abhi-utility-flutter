@@ -2,19 +2,27 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'backup_service.dart';
+import 'subscription_page.dart';
+import 'subscription_service.dart';
 
 /// Account: login / register when logged out, cloud backup when logged in.
 /// Pops with `true` if a backup was restored (so the diary/tasks reload).
 class AccountPage extends StatefulWidget {
-  const AccountPage({super.key});
+  const AccountPage({super.key, this.register = false, this.closeOnLogin = false});
+
+  /// Open on the "Register" tab (the free trial needs an account).
+  final bool register;
+
+  /// Go back as soon as the user is logged in (opened from a locked feature).
+  final bool closeOnLogin;
 
   /// Bumped after a restore; the home shell listens and reloads Diary/Tasks.
   static final restoredVersion = ValueNotifier<int>(0);
 
   /// Opens the account / backup screen from anywhere in the app.
-  static Future<void> open(BuildContext context) async {
+  static Future<void> open(BuildContext context, {bool register = false, bool closeOnLogin = false}) async {
     final restored = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const AccountPage()),
+      MaterialPageRoute(builder: (_) => AccountPage(register: register, closeOnLogin: closeOnLogin)),
     );
     if (restored == true) restoredVersion.value++;
   }
@@ -34,6 +42,21 @@ class _AccountPageState extends State<AccountPage> {
     _api.load().then((_) {
       if (mounted) setState(() => _ready = true);
     });
+    if (widget.closeOnLogin) _api.user.addListener(_closeWhenLoggedIn);
+  }
+
+  bool _closed = false;
+
+  void _closeWhenLoggedIn() {
+    if (_closed || _api.user.value == null || !mounted) return;
+    _closed = true; // the user can change again while the page animates out
+    Navigator.pop(context, _restored);
+  }
+
+  @override
+  void dispose() {
+    _api.user.removeListener(_closeWhenLoggedIn);
+    super.dispose();
   }
 
   @override
@@ -50,7 +73,7 @@ class _AccountPageState extends State<AccountPage> {
           body: !_ready
               ? const Center(child: CircularProgressIndicator())
               : user == null
-                  ? const _AuthForm()
+                  ? _AuthForm(register: widget.register)
                   : _BackupView(user: user, onRestored: () => _restored = true),
         ),
       ),
@@ -61,7 +84,8 @@ class _AccountPageState extends State<AccountPage> {
 // ---- Login / Register ------------------------------------------------------------------
 
 class _AuthForm extends StatefulWidget {
-  const _AuthForm();
+  const _AuthForm({this.register = false});
+  final bool register;
 
   @override
   State<_AuthForm> createState() => _AuthFormState();
@@ -73,7 +97,7 @@ class _AuthFormState extends State<_AuthForm> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
-  bool _register = false;
+  late bool _register = widget.register;
   bool _busy = false;
   bool _showPassword = false;
   String? _error;
@@ -94,15 +118,24 @@ class _AuthFormState extends State<_AuthForm> {
     });
     try {
       final email = _email.text.trim();
+      // The snack bar must outlive this page (it may close itself after login).
+      final messenger = ScaffoldMessenger.of(context);
+      final days = SubscriptionService.instance.trialDays;
+      final bool trialStarted;
       if (_register) {
-        await ApiClient.instance.register(email: email, password: _password.text, name: _name.text.trim());
+        trialStarted =
+            await ApiClient.instance.register(email: email, password: _password.text, name: _name.text.trim());
       } else {
-        await ApiClient.instance.login(email: email, password: _password.text);
+        trialStarted = await ApiClient.instance.login(email: email, password: _password.text);
       }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(_register ? 'Account created — welcome!' : 'Logged in')));
-      }
+      messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 5),
+        content: Text(trialStarted
+            ? '🎁 Welcome! Your $days-day free trial has started: every feature is unlocked.'
+            : _register
+                ? 'Account created — welcome!'
+                : 'Logged in'),
+      ));
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
@@ -128,7 +161,11 @@ class _AuthFormState extends State<_AuthForm> {
                 Text(_register ? 'Create an account' : 'Welcome back',
                     textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 6),
-                Text('Back up your diary and tasks so you never lose them, even on a new phone.',
+                Text(
+                    _register
+                        ? 'Register to get ${SubscriptionService.instance.trialLabel} free trial of every feature, '
+                            'and back up your diary and tasks.'
+                        : 'Back up your diary and tasks so you never lose them, even on a new phone.',
                     textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)),
                 const SizedBox(height: 24),
                 SegmentedButton<bool>(
@@ -467,6 +504,8 @@ class _BackupViewState extends State<_BackupView> {
             ),
           ),
           const SizedBox(height: 12),
+          const _PlanCard(),
+          const SizedBox(height: 12),
           Card(
             color: scheme.primaryContainer,
             child: Padding(
@@ -539,6 +578,41 @@ class _BackupViewState extends State<_BackupView> {
               ),
         ],
       ),
+    );
+  }
+}
+
+/// Trial / Pro status on the account page; opens the subscription screen.
+class _PlanCard extends StatelessWidget {
+  const _PlanCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Entitlement?>(
+      valueListenable: ApiClient.instance.entitlement,
+      builder: (context, ent, _) {
+        final String text;
+        if (ent == null) {
+          text = 'Tap to check';
+        } else if (ent.active && ent.isTrial) {
+          text = 'Free trial · ${ent.daysLeft} days left';
+        } else if (ent.active) {
+          text = 'Pro${ent.expiresAt == null ? ' · lifetime' : ''}';
+        } else {
+          text = ent.trialUsed ? 'Trial ended · subscribe to continue' : 'No plan';
+        }
+        final ok = ent?.active ?? false;
+        return Card(
+          child: ListTile(
+            leading: Icon(ok ? Icons.workspace_premium : Icons.lock_outline,
+                color: ok ? Colors.amber.shade700 : Theme.of(context).colorScheme.error),
+            title: const Text('Subscription'),
+            subtitle: Text(text),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => SubscriptionPage.open(context),
+          ),
+        );
+      },
     );
   }
 }

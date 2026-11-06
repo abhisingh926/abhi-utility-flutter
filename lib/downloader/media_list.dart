@@ -6,7 +6,16 @@ import 'media_finder.dart';
 /// per group with "Show all". Used by the Downloader, the quick panel and the
 /// built-in browser.
 class MediaOptionsList extends StatefulWidget {
-  const MediaOptionsList({super.key, required this.options, required this.onDownload, this.top = 3});
+  const MediaOptionsList({
+    super.key,
+    required this.options,
+    required this.onDownload,
+    this.top = 3,
+    this.streamed = false,
+  });
+
+  /// The page's video is streamed (HLS/DASH): say why only images are listed.
+  final bool streamed;
 
   /// Already sorted (see finalizeOptions).
   final List<MediaOption> options;
@@ -35,7 +44,19 @@ class _MediaOptionsListState extends State<MediaOptionsList> {
       (MediaKind.image, 'Images', Icons.image_outlined),
       (MediaKind.audio, 'Audio', Icons.music_note_outlined),
     ];
-    final children = <Widget>[];
+    final children = <Widget>[
+      if (widget.streamed)
+        Container(
+          margin: const EdgeInsets.only(top: 4, bottom: 4),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: scheme.tertiaryContainer, borderRadius: BorderRadius.circular(10)),
+          child: Text(
+            "The video on this page is streamed in small pieces, so it can't be saved as one file. "
+            'Only its images can be downloaded.',
+            style: TextStyle(color: scheme.onTertiaryContainer),
+          ),
+        ),
+    ];
     for (final (kind, label, icon) in groups) {
       final items = widget.options.where((o) => o.kind == kind).toList();
       if (items.isEmpty) continue;

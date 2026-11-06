@@ -88,6 +88,13 @@ class QuickDownloadActivity : FlutterActivity() {
         }
     }
 
+    /** A new ⬇ tap / share while a panel exists: start over with the new link. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        recreate()
+    }
+
     override fun finish() {
         super.finish()
         @Suppress("DEPRECATION")

@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 
 import 'account/account_page.dart';
 import 'account/api_client.dart';
+import 'account/subscription_page.dart';
+import 'account/subscription_service.dart';
 import 'applock/app_lock_page.dart';
 import 'flashlight_page.dart';
 import 'package:pdfrx/pdfrx.dart' show pdfrxFlutterInitialize;
@@ -114,7 +116,10 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _loadPinned();
-    ApiClient.instance.load(); // shows the logged-in icon right away
+    // Saved login + trial status first (works offline), then the latest from the server.
+    ApiClient.instance.load().then((_) => _refreshAccount());
+    SubscriptionService.instance.init(); // catches Play purchases that finish later
+    _lifecycle = AppLifecycleListener(onResume: _refreshAccount);
     AccountPage.restoredVersion.addListener(_onRestored);
     // Opened from the daily reel report notification -> show the Reels tab.
     const MethodChannel('abhi_utility/reels').invokeMethod<String>('initialTab').then((tab) {
@@ -164,6 +169,15 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  late final AppLifecycleListener _lifecycle;
+
+  /// Re-checks the free trial / subscription (it may have ended or been bought).
+  Future<void> _refreshAccount() async {
+    try {
+      await ApiClient.instance.refreshAccount();
+    } catch (_) {/* offline: the saved status is used */}
+  }
+
   /// Bumped after a backup restore so the Diary and Tasks pages reload.
   int _dataVersion = 0;
 
@@ -179,6 +193,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     AccountPage.restoredVersion.removeListener(_onRestored);
+    _lifecycle.dispose();
     super.dispose();
   }
 
@@ -236,25 +251,42 @@ class _HomeShellState extends State<HomeShell> {
           ],
         ),
         // IndexedStack keeps all tabs alive, so the VPN state survives tab switches.
-        body: IndexedStack(
-          index: _tab,
+        // Without a free trial or subscription, every feature (not Home) is covered
+        // by the paywall: register for the trial, or subscribe once it has ended.
+        body: Stack(
+          fit: StackFit.expand,
           children: [
-            HomePage(
-              key: _homeKey,
-              features: _features,
-              onOpen: _select,
-              pinned: _pinned,
-              onPinnedChanged: _setPinned,
+            IndexedStack(
+              index: _tab,
+              children: [
+                HomePage(
+                  key: _homeKey,
+                  features: _features,
+                  onOpen: _select,
+                  pinned: _pinned,
+                  onPinnedChanged: _setPinned,
+                ),
+                const FlashlightPage(),
+                const VpnPage(),
+                ReelsPage(key: _reelsKey),
+                AppLockPage(key: _lockKey),
+                const PdfScannerPage(),
+                PdfViewerHomePage(key: _viewerKey),
+                JournalPage(key: ValueKey('journal$_dataVersion')),
+                DownloaderPage(key: _downloaderKey),
+                TasksPage(key: ValueKey('tasks$_dataVersion')),
+              ],
             ),
-            const FlashlightPage(),
-            const VpnPage(),
-            ReelsPage(key: _reelsKey),
-            AppLockPage(key: _lockKey),
-            const PdfScannerPage(),
-            PdfViewerHomePage(key: _viewerKey),
-            JournalPage(key: ValueKey('journal$_dataVersion')),
-            DownloaderPage(key: _downloaderKey),
-            TasksPage(key: ValueKey('tasks$_dataVersion')),
+            if (_tab != _homeTab)
+              ListenableBuilder(
+                listenable: Listenable.merge([ApiClient.instance.user, ApiClient.instance.entitlement]),
+                builder: (context, _) => ApiClient.instance.hasAccess
+                    ? const SizedBox.shrink()
+                    : Material(
+                        color: Theme.of(context).colorScheme.surface,
+                        child: const PaywallView(locked: true),
+                      ),
+              ),
           ],
         ),
         // Home + the features pinned on the Home page. A feature opened from

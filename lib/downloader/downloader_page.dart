@@ -503,7 +503,7 @@ class DownloaderPageState extends State<DownloaderPage> with WidgetsBindingObser
             else ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                child: MediaOptionsList(options: r.options, onDownload: _download),
+                child: MediaOptionsList(options: r.options, onDownload: _download, streamed: r.streamingOnly),
               ),
             ],
           ],
