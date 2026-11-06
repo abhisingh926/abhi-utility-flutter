@@ -1,0 +1,412 @@
+package com.abhi.abhi_utility
+
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.provider.Settings
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.hardware.camera2.CameraManager
+import android.os.Build
+import io.flutter.embedding.android.FlutterFragmentActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
+
+/**
+ * Bridges the Flutter UI to native code:
+ *  - "abhi_utility/control": start/stop the shake service, toggle the torch
+ *  - "abhi_utility/torch":   stream of torch on/off state
+ */
+class MainActivity : FlutterFragmentActivity() {
+
+    private lateinit var cameraManager: CameraManager
+    private var cameraId: String? = null
+    private var torchOn = false
+    private var torchCallback: CameraManager.TorchCallback? = null
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        cameraId = findFlashCamera(cameraManager)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+
+        MethodChannel(messenger, "abhi_utility/control").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "hasTorch" -> result.success(cameraId != null)
+                "isServiceRunning" -> result.success(ShakeService.isRunning)
+                "startService" -> {
+                    requestNotificationPermission()
+                    val intent = Intent(this, ShakeService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+                    else startService(intent)
+                    result.success(true)
+                }
+                "stopService" -> {
+                    stopService(Intent(this, ShakeService::class.java))
+                    result.success(false)
+                }
+                "toggleTorch" -> {
+                    val id = cameraId
+                    if (id == null) {
+                        result.error("NO_TORCH", "No flashlight on this device", null)
+                    } else try {
+                        cameraManager.setTorchMode(id, !torchOn)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("TORCH_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(messenger, "abhi_utility/reels").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isEnabled" -> result.success(isReelServiceEnabled())
+                "openSettings" -> {
+                    startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    result.success(null)
+                }
+                "stats" -> {
+                    val days = call.argument<Int>("days") ?: 7
+                    result.success(ReelStats.lastDays(this, days))
+                }
+                "timeStats" -> {
+                    val days = call.argument<Int>("days") ?: 7
+                    result.success(ReelStats.lastDaysTime(this, days))
+                }
+                "isOverlayEnabled" -> result.success(ReelStats.isOverlayEnabled(this))
+                "setOverlayEnabled" -> {
+                    ReelStats.setOverlayEnabled(this, call.argument<Boolean>("enabled") ?: true)
+                    result.success(null)
+                }
+                "appNames" -> result.success(ReelApps.NAMES)
+                "initialTab" -> result.success(intent?.getStringExtra("tab"))
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(messenger, "abhi_utility/applock").setMethodCallHandler { call, result ->
+            when (call.method) {
+                // Installed apps with icons; built off the main thread (can take a moment).
+                "apps" -> Thread {
+                    val apps = AppLock.launchableApps(this).map { a ->
+                        mapOf(
+                            "pkg" to a.pkg,
+                            "label" to a.label,
+                            "category" to a.category,
+                            "system" to a.system,
+                            "icon" to AppLock.appIcon(this, a.pkg),
+                        )
+                    }
+                    runOnUiThread { result.success(apps) }
+                }.start()
+                "rules" -> Thread {
+                    val list = AppLock.rules(this).map { (pkg, rule) ->
+                        val s = AppLock.status(this, pkg, rule)
+                        mapOf(
+                            "pkg" to pkg,
+                            "label" to AppLock.appLabel(this, pkg),
+                            "icon" to AppLock.appIcon(this, pkg),
+                            "mode" to rule.mode,
+                            "minutes" to rule.minutes,
+                            "usedSeconds" to s.usedSeconds,
+                            "limitSeconds" to s.limitSeconds,
+                            "locked" to s.locked,
+                            "unlockAt" to s.unlockAt,
+                        )
+                    }
+                    runOnUiThread { result.success(list) }
+                }.start()
+                "setRule" -> {
+                    val pkg = call.argument<String>("pkg")!!
+                    val mode = call.argument<String>("mode")!!
+                    val minutes = call.argument<Int>("minutes") ?: 0
+                    AppLock.setRule(this, pkg, AppLock.Rule(mode, minutes))
+                    result.success(null)
+                }
+                // Same rule for several apps at once (e.g. "lock all social media").
+                "setRules" -> {
+                    val pkgs = call.argument<List<String>>("pkgs") ?: emptyList()
+                    val rule = AppLock.Rule(
+                        call.argument<String>("mode")!!, call.argument<Int>("minutes") ?: 0
+                    )
+                    pkgs.forEach { AppLock.setRule(this, it, rule) }
+                    result.success(null)
+                }
+                "hasPin" -> result.success(AppLock.hasPin(this))
+                "checkPin" -> result.success(AppLock.checkPin(this, call.argument<String>("pin") ?: ""))
+                "setPin" -> {
+                    // Changing an existing password needs the current one.
+                    val old = call.argument<String>("old")
+                    if (AppLock.hasPin(this) && (old == null || !AppLock.checkPin(this, old))) {
+                        result.error("WRONG_PIN", "Current password is wrong", null)
+                    } else {
+                        AppLock.setPin(this, call.argument<String>("pin")!!)
+                        result.success(null)
+                    }
+                }
+                "removeRule" -> {
+                    AppLock.setRule(this, call.argument<String>("pkg")!!, null)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(messenger, "abhi_utility/app").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "info" -> result.success(
+                    mapOf("version" to AppShare.versionName(this), "apkSize" to AppShare.apkSize(this))
+                )
+                "shareApk" -> Thread {
+                    try {
+                        val uri = AppShare.exportApk(this)
+                        runOnUiThread {
+                            AppShare.share(this, uri)
+                            result.success(null)
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("SHARE_FAILED", e.message, null) }
+                    }
+                }.start()
+                else -> result.notImplemented()
+            }
+        }
+
+        pdfChannel = MethodChannel(messenger, "abhi_utility/pdf")
+        pdfChannel!!.setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "save" -> {
+                        val bytes = call.argument<ByteArray>("bytes")!!
+                        val name = call.argument<String>("name")!!
+                        Thread {
+                            try {
+                                val uri = PdfFiles.save(this, bytes, name)
+                                runOnUiThread { result.success(uri) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("SAVE_FAILED", e.message, null) }
+                            }
+                        }.start()
+                    }
+                    "exists" -> result.success(PdfFiles.exists(this, call.argument<String>("uri")!!))
+                    "open" -> { PdfFiles.open(this, call.argument<String>("uri")!!); result.success(null) }
+                    "share" -> { PdfFiles.share(this, call.argument<String>("uri")!!); result.success(null) }
+                    "copyToCache" -> {
+                        val uri = call.argument<String>("uri")!!
+                        Thread {
+                            try {
+                                val path = PdfFiles.copyToCache(this, uri)
+                                runOnUiThread { result.success(path) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("OPEN_FAILED", e.message, null) }
+                            }
+                        }.start()
+                    }
+                    // PDF this app was opened with ("Open with → Abhi Utility"), if any.
+                    "takeIncoming" -> {
+                        val uri = incomingPdfUri(intent)
+                        intent?.data = null // only once
+                        result.success(uri)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (e: Exception) {
+                result.error("PDF_ERROR", e.message, null)
+            }
+        }
+
+        downloaderChannel = MethodChannel(messenger, "abhi_utility/downloader")
+        downloaderChannel!!.setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "start" -> result.success(
+                        Downloads.start(
+                            this,
+                            call.argument<String>("url")!!,
+                            call.argument<String>("fileName")!!,
+                            call.argument<String>("mimeType"),
+                            call.argument<String>("referer"),
+                            call.argument<String>("userAgent"),
+                            call.argument<String>("cookie"),
+                        )
+                    )
+                    // Login cookies of the built-in browser, so logged-in videos download too.
+                    "cookies" -> result.success(
+                        android.webkit.CookieManager.getInstance().getCookie(call.argument<String>("url")!!)
+                    )
+                    "list" -> result.success(Downloads.list(this))
+                    "open" -> {
+                        Downloads.open(this, call.argument<Number>("id")!!.toLong(), call.argument<String>("mime"))
+                        result.success(null)
+                    }
+                    "share" -> {
+                        Downloads.share(this, call.argument<Number>("id")!!.toLong(), call.argument<String>("mime"))
+                        result.success(null)
+                    }
+                    "remove" -> {
+                        Downloads.remove(this, call.argument<Number>("id")!!.toLong())
+                        result.success(null)
+                    }
+                    "bubbleEnabled" -> result.success(Downloads.bubbleEnabled(this))
+                    "setBubbleEnabled" -> {
+                        Downloads.setBubbleEnabled(this, call.argument<Boolean>("enabled") ?: true)
+                        result.success(null)
+                    }
+                    // Why the app was opened: a shared link or the floating ⬇ button.
+                    "takeLaunch" -> {
+                        result.success(downloaderLaunch(intent))
+                        intent?.removeExtra(Intent.EXTRA_TEXT)
+                        intent?.removeExtra(EXTRA_OPEN)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (e: Exception) {
+                result.error("DOWNLOAD_ERROR", e.message, null)
+            }
+        }
+
+        MethodChannel(messenger, "abhi_utility/status").setMethodCallHandler { call, result ->
+            val business = call.argument<Boolean>("business") ?: false
+            try {
+                when (call.method) {
+                    "hasAccess" -> result.success(StatusSaver.tree(this, business) != null)
+                    // Opens the system folder picker at WhatsApp's status folder.
+                    "pick" -> {
+                        pendingStatusPick?.success(false)
+                        pendingStatusPick = result
+                        pendingStatusBusiness = business
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(StatusSaver.pickIntent(business), StatusSaver.REQUEST_CODE)
+                    }
+                    "list" -> Thread {
+                        val list = try { StatusSaver.list(this, business) } catch (e: Exception) { null }
+                        runOnUiThread { result.success(list) }
+                    }.start()
+                    "thumb" -> Thread {
+                        val bytes = StatusSaver.thumbnail(this, call.argument<String>("uri")!!, call.argument<Boolean>("video") ?: false)
+                        runOnUiThread { result.success(bytes) }
+                    }.start()
+                    "save" -> Thread {
+                        try {
+                            val where = StatusSaver.save(this, call.argument<String>("uri")!!, call.argument<String>("name")!!, call.argument<String>("mime")!!)
+                            runOnUiThread { result.success(where) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SAVE_FAILED", e.message, null) }
+                        }
+                    }.start()
+                    "open" -> {
+                        StatusSaver.open(this, call.argument<String>("uri")!!, call.argument<String>("mime")!!)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (e: Exception) {
+                result.error("STATUS_ERROR", e.message, null)
+            }
+        }
+
+        EventChannel(messenger, "abhi_utility/torch").setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                val cb = object : CameraManager.TorchCallback() {
+                    override fun onTorchModeChanged(id: String, enabled: Boolean) {
+                        if (id == cameraId) {
+                            torchOn = enabled
+                            events.success(enabled)
+                        }
+                    }
+                }
+                torchCallback = cb
+                // Callback fires immediately with the current state.
+                cameraManager.registerTorchCallback(cb, null)
+            }
+
+            override fun onCancel(arguments: Any?) {
+                torchCallback?.let { cameraManager.unregisterTorchCallback(it) }
+                torchCallback = null
+            }
+        })
+    }
+
+    private fun isReelServiceEnabled(): Boolean {
+        val enabled = Settings.Secure.getString(
+            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        val me = ComponentName(this, ReelCounterService::class.java)
+        return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
+        }
+    }
+
+    private var pdfChannel: MethodChannel? = null
+
+    private fun incomingPdfUri(i: Intent?): String? {
+        if (i?.action != Intent.ACTION_VIEW) return null
+        return i.data?.toString()
+    }
+
+    private var downloaderChannel: MethodChannel? = null
+    private var pendingStatusPick: MethodChannel.Result? = null
+    private var pendingStatusBusiness = false
+
+    @Deprecated("Needed for the folder picker result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != StatusSaver.REQUEST_CODE) return
+        val result = pendingStatusPick ?: return
+        pendingStatusPick = null
+        val tree = data?.data
+        if (resultCode != RESULT_OK || tree == null) {
+            result.success(null) // cancelled
+            return
+        }
+        try {
+            // true = the WhatsApp status folder; false = some other folder was picked.
+            result.success(StatusSaver.onPicked(this, pendingStatusBusiness, tree))
+        } catch (e: Exception) {
+            result.error("PICK_FAILED", e.message, null)
+        }
+    }
+
+    companion object {
+        /** Extra set by the floating ⬇ button: open the Downloader. */
+        const val EXTRA_OPEN = "open"
+    }
+
+    /** {action: "share", text} for "Share → Abhi Utility", {action: "bubble"} for the ⬇ button, else null. */
+    private fun downloaderLaunch(i: Intent?): Map<String, String>? {
+        if (i == null) return null
+        if (i.action == Intent.ACTION_SEND) {
+            val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return null
+            return mapOf("action" to "share", "text" to text)
+        }
+        if (i.getStringExtra(EXTRA_OPEN) == "downloader") return mapOf("action" to "bubble")
+        if (i.getStringExtra(EXTRA_OPEN) == "status") return mapOf("action" to "status")
+        return null
+    }
+
+    /** App already open and another app sends a PDF / link, or the ⬇ button is tapped. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingPdfUri(intent)?.let { pdfChannel?.invokeMethod("incomingPdf", it) }
+        downloaderLaunch(intent)?.let { downloaderChannel?.invokeMethod("launch", it) }
+    }
+
+    override fun onDestroy() {
+        torchCallback?.let { cameraManager.unregisterTorchCallback(it) }
+        super.onDestroy()
+    }
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reel_counter_label">Abhi Utility reel counter</string>
+    <string name="reel_counter_description">Counts the reels and shorts you scroll and the time you spend in Instagram, YouTube, Facebook, Snapchat and other short-video apps, and shows a small counter on top of those apps. For other apps only the app name is used, to know when you leave a social app. Counts stay on this phone and are never uploaded.</string>
+</resources>

@@ -1,0 +1,238 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'applock/app_lock_page.dart';
+import 'flashlight_page.dart';
+import 'package:pdfrx/pdfrx.dart' show pdfrxFlutterInitialize;
+
+import 'diary/diary_lock.dart';
+import 'home/app_share.dart';
+import 'home/home_page.dart';
+import 'home/nav_prefs.dart';
+import 'diary/diary_page.dart';
+import 'downloader/downloader_page.dart';
+import 'pdf/pdf_scanner_page.dart';
+import 'pdf/pdf_viewer_page.dart';
+import 'pdf/pdf_store.dart';
+import 'reels/reels_page.dart';
+import 'vpn/vpn_page.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await pdfrxFlutterInitialize(); // PDF engine (PDFium) for the viewer/editor
+  runApp(const AbhiUtilityApp());
+}
+
+class AbhiUtilityApp extends StatelessWidget {
+  const AbhiUtilityApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Abhi Utility',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(colorSchemeSeed: Colors.amber, useMaterial3: true),
+      darkTheme: ThemeData(
+        colorSchemeSeed: Colors.amber,
+        useMaterial3: true,
+        brightness: Brightness.dark,
+      ),
+      home: const HomeShell(),
+    );
+  }
+}
+
+class HomeShell extends StatefulWidget {
+  const HomeShell({super.key});
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
+  static const _homeTab = 0;
+  static const _reelsTab = 3;
+  static const _lockTab = 4;
+  static const _scannerTab = 5;
+  static const _viewerTab = 6;
+  static const _diaryTab = 7;
+  static const _downloaderTab = 8;
+
+  /// Every feature: drives both the Home page cards and the bottom bar.
+  static const _features = [
+    HomeFeature(tab: 1, icon: Icons.flashlight_on_outlined, title: 'Flashlight',
+        subtitle: 'Shake to turn the torch on/off', color: Colors.amber),
+    HomeFeature(tab: 2, icon: Icons.vpn_key_outlined, title: 'VPN',
+        subtitle: 'Free servers in many countries', color: Colors.teal),
+    HomeFeature(tab: _reelsTab, icon: Icons.slow_motion_video, title: 'Reels',
+        subtitle: 'Count reels & time on social apps', color: Colors.pink),
+    HomeFeature(tab: _lockTab, icon: Icons.lock_outline, title: 'App Lock',
+        subtitle: 'Limit or lock apps with a password', color: Colors.deepPurple),
+    HomeFeature(tab: _scannerTab, icon: Icons.document_scanner_outlined, title: 'PDF Scanner',
+        subtitle: 'Scan papers or photos into a PDF', color: Colors.orange),
+    HomeFeature(tab: _viewerTab, icon: Icons.picture_as_pdf_outlined, title: 'PDF Viewer',
+        subtitle: 'Open, read, sign & edit PDFs', color: Colors.red),
+    HomeFeature(tab: _diaryTab, icon: Icons.menu_book, title: 'Diary',
+        subtitle: 'Daily tasks & private diary', color: Colors.blue),
+    HomeFeature(tab: _downloaderTab, icon: Icons.download_for_offline_outlined, title: 'Downloader',
+        subtitle: 'Save videos & images from links', color: Colors.green),
+  ];
+
+  final _homeKey = GlobalKey<HomePageState>();
+  final _reelsKey = GlobalKey<ReelsPageState>();
+  final _lockKey = GlobalKey<AppLockPageState>();
+  final _viewerKey = GlobalKey<PdfViewerHomePageState>();
+  final _downloaderKey = GlobalKey<DownloaderPageState>();
+  int _tab = _homeTab;
+
+  /// Features shown in the bottom bar after Home (chosen on the Home page).
+  List<int> _pinned = const [_reelsTab, _lockTab, _viewerTab, _diaryTab];
+
+  Future<void> _loadPinned() async {
+    final pinned = await NavPrefs.load(_pinned, {for (final f in _features) f.tab});
+    if (mounted) setState(() => _pinned = pinned);
+  }
+
+  void _setPinned(List<int> pinned) {
+    setState(() => _pinned = pinned);
+    NavPrefs.save(pinned);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPinned();
+    // Opened from the daily reel report notification -> show the Reels tab.
+    const MethodChannel('abhi_utility/reels').invokeMethod<String>('initialTab').then((tab) {
+      if (tab == 'reels' && mounted) setState(() => _tab = _reelsTab);
+    }).catchError((_) {});
+
+    // "Open with → Abhi Utility" for PDFs: while running…
+    // "Share → Abhi Utility" links and the floating ⬇ button: while running…
+    DownloaderPageState.channel.setMethodCallHandler((call) async {
+      if (call.method == 'launch') await _openDownloader(call.arguments as Map);
+    });
+    // …and when the app was started by them.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final launch = await DownloaderPageState.channel.invokeMapMethod<String, dynamic>('takeLaunch');
+      if (launch != null) await _openDownloader(launch);
+    });
+
+    PdfStore.channel.setMethodCallHandler((call) async {
+      if (call.method == 'incomingPdf') await _openIncomingPdf(call.arguments as String);
+    });
+    // …and when the app was started by it.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final uri = await PdfStore.channel.invokeMethod<String>('takeIncoming');
+      if (uri != null) await _openIncomingPdf(uri);
+    });
+  }
+
+  Future<void> _openDownloader(Map launch) async {
+    if (!mounted) return;
+    _select(_downloaderTab);
+    // Let the tab build before handing over the link.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await _downloaderKey.currentState?.handleLaunch(launch);
+  }
+
+  Future<void> _openIncomingPdf(String uri) async {
+    if (!mounted) return;
+    _select(_viewerTab);
+    try {
+      final path = await PdfStore.localCopy(uri);
+      final name = path.split(RegExp(r'[\/]')).last;
+      await _viewerKey.currentState?.openInViewer(path, name);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open PDF: $e')));
+      }
+    }
+  }
+
+  void _select(int i) {
+    // Leaving App Lock locks it again (password needed next time).
+    if (_tab == _lockTab && i != _lockTab) _lockKey.currentState?.relock();
+    // Leaving the Diary tab locks the diary (if it has a password).
+    if (_tab == _diaryTab && i != _diaryTab) DiaryLock.lockNow();
+    setState(() => _tab = i);
+    if (i == _homeTab) _homeKey.currentState?.refresh();
+    if (i == _reelsTab) _reelsKey.currentState?.refresh();
+    if (i == _lockTab) _lockKey.currentState?.refresh();
+    if (i == _viewerTab) _viewerKey.currentState?.refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      // Back on a feature tab goes to Home; back on Home closes the app.
+      canPop: _tab == _homeTab,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _select(_homeTab);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: GestureDetector(
+            onTap: () => _select(_homeTab),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset('static/image/icon/logo_256.png', width: 34, height: 34),
+                ),
+                const SizedBox(width: 12),
+                const Text('Abhi Utility'),
+              ],
+            ),
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Share this app',
+              icon: const Icon(Icons.share),
+              onPressed: () => AppShare.shareApk(context),
+            ),
+          ],
+        ),
+        // IndexedStack keeps all tabs alive, so the VPN state survives tab switches.
+        body: IndexedStack(
+          index: _tab,
+          children: [
+            HomePage(
+              key: _homeKey,
+              features: _features,
+              onOpen: _select,
+              pinned: _pinned,
+              onPinnedChanged: _setPinned,
+            ),
+            const FlashlightPage(),
+            const VpnPage(),
+            ReelsPage(key: _reelsKey),
+            AppLockPage(key: _lockKey),
+            const PdfScannerPage(),
+            PdfViewerHomePage(key: _viewerKey),
+            const DiaryPage(),
+            DownloaderPage(key: _downloaderKey),
+          ],
+        ),
+        // Home + the features pinned on the Home page. A feature opened from
+        // Home that isn't pinned keeps Home highlighted.
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _pinned.contains(_tab) ? _pinned.indexOf(_tab) + 1 : 0,
+          onDestinationSelected: (i) => _select(i == 0 ? _homeTab : _pinned[i - 1]),
+          destinations: [
+            const NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            for (final tab in _pinned)
+              NavigationDestination(
+                icon: Icon(_features.firstWhere((f) => f.tab == tab).icon),
+                label: _features.firstWhere((f) => f.tab == tab).title,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
