@@ -227,6 +227,44 @@ int? heightHint(String? text) {
     }
   }
 
+  // All images in the page content (<img>, lazy-loaded ones, the largest srcset
+  // version, <picture> sources). Icons / tiny images are skipped.
+  String? largestFromSrcset(String? srcset) {
+    if (srcset == null || srcset.trim().isEmpty) return null;
+    String? best;
+    var bestW = -1.0;
+    for (final part in srcset.split(RegExp(r',\s+'))) {
+      final bits = part.trim().split(RegExp(r'\s+'));
+      if (bits.isEmpty || bits.first.isEmpty) continue;
+      final d = bits.length > 1 ? bits[1] : '1x';
+      final w = double.tryParse(d.replaceAll(RegExp(r'[wx]$'), '')) ?? 1;
+      final weight = d.endsWith('x') ? w * 1000 : w;
+      if (weight > bestW) {
+        bestW = weight;
+        best = bits.first;
+      }
+    }
+    return best;
+  }
+
+  bool tiny(String? v) {
+    final n = int.tryParse((v ?? '').replaceAll(RegExp(r'[^0-9]'), ''));
+    return n != null && n < 100;
+  }
+
+  for (final img in doc.getElementsByTagName('img')) {
+    final a = img.attributes;
+    if (tiny(a['width']) || tiny(a['height'])) continue;
+    final src = largestFromSrcset(a['srcset'] ?? a['data-srcset']) ??
+        a['data-src'] ?? a['data-original'] ?? a['data-lazy-src'] ?? a['data-full'] ?? a['src'];
+    if (src == null || src.toLowerCase().contains('.svg')) continue;
+    add(src, kind: MediaKind.image, height: int.tryParse(a['height'] ?? ''));
+  }
+  for (final s in doc.querySelectorAll('picture source')) {
+    final src = largestFromSrcset(s.attributes['srcset']);
+    if (src != null && !src.toLowerCase().contains('.svg')) add(src, kind: MediaKind.image);
+  }
+
   // JSON-LD (VideoObject / ImageObject / AudioObject).
   void walk(dynamic node) {
     if (node is Map) {
@@ -272,12 +310,28 @@ int? heightHint(String? text) {
   );
 }
 
+/// Videos, then images, then audio; inside each group the biggest file first
+/// (unknown sizes last, ordered by quality).
 int _compare(MediaOption a, MediaOption b) {
-  int rank(MediaKind k) => switch (k) { MediaKind.video => 0, MediaKind.audio => 1, MediaKind.image => 2 };
+  int rank(MediaKind k) => switch (k) { MediaKind.video => 0, MediaKind.image => 1, MediaKind.audio => 2 };
   final r = rank(a.kind).compareTo(rank(b.kind));
   if (r != 0) return r;
-  return (b.height ?? -1).compareTo(a.height ?? -1); // best quality first
+  final bySize = (b.sizeBytes ?? -1).compareTo(a.sizeBytes ?? -1);
+  if (bySize != 0) return bySize;
+  return (b.height ?? -1).compareTo(a.height ?? -1);
 }
+
+/// Keeps the list size-checkable: all videos/audio (max 30) and up to 30 images.
+List<MediaOption> candidatesToCheck(List<MediaOption> all) => [
+      ...all.where((o) => o.kind != MediaKind.image).take(30),
+      ...all.where((o) => o.kind == MediaKind.image).take(30),
+    ];
+
+/// Sorts after sizes are known and drops icon-sized images (< 15 KB).
+List<MediaOption> finalizeOptions(List<MediaOption> options) => options
+    .where((o) => !(o.kind == MediaKind.image && o.sizeBytes != null && o.sizeBytes! < 15 * 1024))
+    .toList()
+  ..sort(_compare);
 
 /// Fetches [input] (a link or text containing one) and returns what can be downloaded.
 Future<FindResult> findMedia(String input, {http.Client? client}) async {
@@ -341,10 +395,14 @@ Future<FindResult> findMedia(String input, {http.Client? client}) async {
       if (bytes.length > 3 * 1024 * 1024) break;
     }
     final parsed = parseMediaFromHtml(utf8.decode(bytes, allowMalformed: true), url);
-    final options = parsed.options.take(25).toList();
+    final options = candidatesToCheck(parsed.options);
     await checkSizes(c, options, referer: url.toString());
-    options.sort(_compare);
-    return FindResult(pageUrl: url, title: parsed.title, options: options, streamingOnly: parsed.streamingOnly);
+    return FindResult(
+      pageUrl: url,
+      title: parsed.title,
+      options: finalizeOptions(options),
+      streamingOnly: parsed.streamingOnly,
+    );
   } on TimeoutException {
     throw FinderException('The site took too long to answer. Check your internet and try again.');
   } on FinderException {
@@ -389,7 +447,21 @@ Future<void> checkSizes(
   Future<String?> Function(Uri url)? cookieFor,
 }) async {
   final drop = <MediaOption>{};
-  await Future.wait(options.map((o) async {
+  // 8 at a time: fast, without flooding the site.
+  for (var i = 0; i < options.length; i += 8) {
+    await _checkBatch(c, options.skip(i).take(8).toList(), drop, referer, cookieFor);
+  }
+  options.removeWhere(drop.contains);
+}
+
+Future<void> _checkBatch(
+  http.Client c,
+  List<MediaOption> batch,
+  Set<MediaOption> drop,
+  String referer,
+  Future<String?> Function(Uri url)? cookieFor,
+) async {
+  await Future.wait(batch.map((o) async {
     try {
       final req = http.Request('GET', o.url)
         ..headers['User-Agent'] = browserUserAgent
@@ -416,7 +488,6 @@ Future<void> checkSizes(
       // Unknown size: keep the option anyway.
     }
   }));
-  options.removeWhere(drop.contains);
 }
 
 /// Safe file name like "Sunset_timelapse_720p.mp4".

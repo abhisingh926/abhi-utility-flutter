@@ -7,6 +7,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'ad_block.dart';
 import 'media_finder.dart';
+import 'media_list.dart';
 
 /// Built-in browser for sites that need a login: the user logs in here, opens
 /// the video, taps ⬇, and the download uses their login session (cookies).
@@ -124,7 +125,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
         pageUrl,
         [for (final u in (data['urls'] as List)) '$u'],
       );
-      final options = parsed.options.take(25).toList();
+      final options = candidatesToCheck(parsed.options);
       final client = http.Client();
       try {
         await checkSizes(client, options, referer: pageUrl.toString(), cookieFor: _cookieFor);
@@ -136,7 +137,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
         FindResult(
           pageUrl: pageUrl,
           title: parsed.title ?? (data['title'] as String?),
-          options: options,
+          options: finalizeOptions(options),
           streamingOnly: parsed.streamingOnly,
         ),
         data['ua'] as String?,
@@ -178,27 +179,16 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   ),
                 )
               else
-                for (final o in r.options)
-                  ListTile(
-                    leading: Icon(
-                      switch (o.kind) {
-                        MediaKind.video => Icons.movie_outlined,
-                        MediaKind.audio => Icons.music_note_outlined,
-                        MediaKind.image => Icons.image_outlined,
-                      },
-                      color: scheme.primary,
-                    ),
-                    title: Text(o.quality, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text([o.extension.toUpperCase(), _size(o.sizeBytes)].where((s) => s.isNotEmpty).join(' · ')),
-                    trailing: FilledButton.tonalIcon(
-                      onPressed: () async {
-                        Navigator.pop(context);
-                        await _download(r, o, userAgent);
-                      },
-                      icon: const Icon(Icons.download),
-                      label: const Text('Download'),
-                    ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: MediaOptionsList(
+                    options: r.options,
+                    onDownload: (o) async {
+                      Navigator.pop(context);
+                      await _download(r, o, userAgent);
+                    },
                   ),
+                ),
               const SizedBox(height: 16),
             ],
           ),
@@ -221,12 +211,6 @@ class _BrowserScreenState extends State<BrowserScreen> {
     } on PlatformException catch (e) {
       _snack('Could not start the download: ${e.message}');
     }
-  }
-
-  static String _size(int? bytes) {
-    if (bytes == null || bytes <= 0) return '';
-    if (bytes >= 1024 * 1024) return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
   }
 
   void _snack(String msg) {

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'link_history.dart';
 import 'media_finder.dart';
+import 'media_list.dart';
 
 /// Quick download panel shown over another app (QuickDownloadActivity): finds
 /// the video behind the shared / copied link and downloads the chosen quality
@@ -97,12 +98,6 @@ class _QuickPanelState extends State<_QuickPanel> {
   }
 
   Future<void> _close() => _channel.invokeMethod('close');
-
-  static String _size(int? bytes) {
-    if (bytes == null || bytes <= 0) return '';
-    if (bytes >= 1024 * 1024) return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -213,29 +208,8 @@ class _QuickPanelState extends State<_QuickPanel> {
         ],
       );
     }
-    return ListView(
-      shrinkWrap: true,
-      children: [
-        for (final o in r.options)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(
-              switch (o.kind) {
-                MediaKind.video => Icons.movie_outlined,
-                MediaKind.audio => Icons.music_note_outlined,
-                MediaKind.image => Icons.image_outlined,
-              },
-              color: scheme.primary,
-            ),
-            title: Text(o.quality, style: const TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: Text([o.extension.toUpperCase(), _size(o.sizeBytes)].where((s) => s.isNotEmpty).join(' · ')),
-            trailing: FilledButton.icon(
-              onPressed: () => _download(o),
-              icon: const Icon(Icons.download, size: 18),
-              label: const Text('Download'),
-            ),
-          ),
-      ],
+    return SingleChildScrollView(
+      child: MediaOptionsList(options: r.options, onDownload: _download),
     );
   }
 }

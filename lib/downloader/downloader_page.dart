@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'browser_screen.dart';
 import 'link_history.dart';
 import 'media_finder.dart';
+import 'media_list.dart';
 import 'status_saver_screen.dart';
 
 /// Video / image downloader: paste or share a link, pick a quality, download.
@@ -279,12 +280,6 @@ class DownloaderPageState extends State<DownloaderPage> with WidgetsBindingObser
     );
   }
 
-  static IconData _icon(MediaKind k) => switch (k) {
-        MediaKind.video => Icons.movie_outlined,
-        MediaKind.audio => Icons.music_note_outlined,
-        MediaKind.image => Icons.image_outlined,
-      };
-
   // ---- UI ----------------------------------------------------------------------------------
 
   @override
@@ -508,21 +503,8 @@ class DownloaderPageState extends State<DownloaderPage> with WidgetsBindingObser
             else ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                child: Text('Choose a quality:', style: TextStyle(color: scheme.onSurfaceVariant)),
+                child: MediaOptionsList(options: r.options, onDownload: _download),
               ),
-              for (final o in r.options)
-                ListTile(
-                  leading: Icon(_icon(o.kind), color: scheme.primary),
-                  title: Text(o.quality, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(
-                    [o.extension.toUpperCase(), _size(o.sizeBytes)].where((s) => s.isNotEmpty).join(' · '),
-                  ),
-                  trailing: FilledButton.tonalIcon(
-                    onPressed: () => _download(o),
-                    icon: const Icon(Icons.download),
-                    label: const Text('Download'),
-                  ),
-                ),
             ],
           ],
         ),

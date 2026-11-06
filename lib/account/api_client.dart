@@ -206,7 +206,9 @@ class ApiClient {
       return ApiException(res.statusCode, err['code'] as String? ?? 'error',
           err['message'] as String? ?? 'Something went wrong', {...err, ...j});
     } catch (_) {
-      return ApiException(res.statusCode, 'error', 'Server error (${res.statusCode})');
+      // Not our JSON: usually the backend isn't deployed at this address.
+      return ApiException(res.statusCode, 'error',
+          'Backup server not found at $baseUrl (error ${res.statusCode}). Is the backend running there?');
     }
   }
 }
