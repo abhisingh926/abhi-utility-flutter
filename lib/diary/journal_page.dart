@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../account/backup_button.dart';
 import '../applock/pin_pad.dart';
 import 'diary_lock.dart';
 import 'journal_editor.dart';
@@ -278,6 +279,7 @@ class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
                         _query = '';
                       }),
                     ),
+                    const BackupButton(),
                     PopupMenuButton<String>(
                       tooltip: 'Diary lock',
                       icon: Icon(_lockEnabled ? Icons.lock : Icons.lock_open,

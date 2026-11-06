@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../account/backup_button.dart';
 import 'diary_store.dart';
 
 /// Daily to-do list, one page per day.
@@ -285,6 +286,7 @@ class _TasksPageState extends State<TasksPage> {
                 icon: const Icon(Icons.chevron_right),
                 onPressed: () => _goTo(_day.add(const Duration(days: 1))),
               ),
+              const BackupButton(),
             ],
           ),
         ),

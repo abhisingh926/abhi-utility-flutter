@@ -47,7 +47,13 @@ dependencies:
   crypto: ^3.0.8
   local_auth: ^3.0.2
   html: ^0.15.7
-  webview_flutter: ^4.14.1
+  flutter_inappwebview: 6.2.0-beta.3
+
+# flutter_inappwebview_android 1.1.x uses proguard-android.txt, which AGP 9 rejects.
+# 1.2.0-beta.3 switches to proguard-android-optimize.txt. Remove once a stable release has the fix.
+dependency_overrides:
+  flutter_inappwebview_android: 1.2.0-beta.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

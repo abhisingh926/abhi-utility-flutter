@@ -3,12 +3,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'ad_block.dart';
 import 'media_finder.dart';
 
 /// Built-in browser for sites that need a login: the user logs in here, opens
 /// the video, taps ⬇, and the download uses their login session (cookies).
+/// Blocks ads, pop-ups, redirects to other sites without a tap, and links that
+/// try to open other apps.
 class BrowserScreen extends StatefulWidget {
   const BrowserScreen({super.key, this.initialUrl});
 
@@ -21,8 +24,10 @@ class BrowserScreen extends StatefulWidget {
 class _BrowserScreenState extends State<BrowserScreen> {
   static const _downloader = MethodChannel('abhi_utility/downloader');
 
-  late final WebViewController _web;
+  InAppWebViewController? _web;
+  late final Uri _start;
   final _address = TextEditingController();
+  int _blocked = 0;
   int _progress = 0;
   bool _canBack = false;
   bool _finding = false;
@@ -50,31 +55,45 @@ class _BrowserScreenState extends State<BrowserScreen> {
   @override
   void initState() {
     super.initState();
-    _web = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(NavigationDelegate(
-        onNavigationRequest: (req) {
-          final uri = Uri.tryParse(req.url);
-          if (uri != null && isBlockedHost(uri)) {
-            _snack(blockedMessage);
-            return NavigationDecision.prevent;
-          }
-          return NavigationDecision.navigate;
-        },
-        onProgress: (p) => setState(() => _progress = p),
-        onPageStarted: (url) => _address.text = url,
-        onPageFinished: (url) async {
-          _address.text = url;
-          final back = await _web.canGoBack();
-          if (mounted) setState(() => _canBack = back);
-        },
-      ));
     final start = widget.initialUrl != null ? extractUrl(widget.initialUrl!) : null;
-    if (start != null && !isBlockedHost(start)) {
-      _web.loadRequest(start);
-    } else {
-      _web.loadRequest(Uri.parse('https://duckduckgo.com/'));
+    _start = (start != null && !isBlockedHost(start)) ? start : Uri.parse('https://duckduckgo.com/');
+    _address.text = _start.toString();
+  }
+
+  /// Decides whether the page may go to [action]'s address.
+  NavigationActionPolicy _decide(NavigationAction action) {
+    final url = action.request.url;
+    if (url == null) return NavigationActionPolicy.CANCEL;
+    // Ads often try intent:// / market:// links to open other apps or install pages.
+    if (!const {'http', 'https', 'about', 'data', 'blob', 'javascript'}.contains(url.scheme)) {
+      _countBlocked('Blocked a link that tried to open another app (often an ad).');
+      return NavigationActionPolicy.CANCEL;
     }
+    if (isBlockedHost(url)) {
+      _snack(blockedMessage);
+      return NavigationActionPolicy.CANCEL;
+    }
+    if (isAdUrl(url.toString())) {
+      _countBlocked(null);
+      return NavigationActionPolicy.CANCEL;
+    }
+    // The pop-under trick: the page jumps to another site without the user tapping.
+    final current = Uri.tryParse(_address.text);
+    if (action.isForMainFrame &&
+        action.hasGesture == false &&
+        current != null &&
+        current.host.isNotEmpty &&
+        siteOf(url.host) != siteOf(current.host) &&
+        (action.isRedirect ?? false) == false) {
+      _countBlocked('Blocked an automatic jump to ${url.host}. Tap a link to open it.');
+      return NavigationActionPolicy.CANCEL;
+    }
+    return NavigationActionPolicy.ALLOW;
+  }
+
+  void _countBlocked(String? message) {
+    setState(() => _blocked++);
+    if (message != null) _snack(message);
   }
 
   void _go(String text) {
@@ -87,7 +106,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
       _snack(blockedMessage);
       return;
     }
-    _web.loadRequest(uri);
+    _web?.loadUrl(urlRequest: URLRequest(url: WebUri.uri(uri)));
   }
 
   Future<String?> _cookieFor(Uri url) => _downloader.invokeMethod<String>('cookies', {'url': url.toString()});
@@ -95,12 +114,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Future<void> _find() async {
     setState(() => _finding = true);
     try {
-      final raw = await _web.runJavaScriptReturningResult(_collectJs);
-      // Android returns the JSON string itself JSON-encoded.
-      var text = raw is String ? raw : raw.toString();
-      if (text.startsWith('"')) text = jsonDecode(text) as String;
-      final data = jsonDecode(text) as Map<String, dynamic>;
-      final pageUrl = Uri.parse(await _web.currentUrl() ?? 'about:blank');
+      final web = _web;
+      if (web == null) return;
+      final raw = await web.evaluateJavascript(source: _collectJs);
+      final data = jsonDecode(raw is String ? raw : '$raw') as Map<String, dynamic>;
+      final pageUrl = (await web.getUrl())?.uriValue ?? Uri.parse('about:blank');
       final parsed = parseBrowserPage(
         data['html'] as String,
         pageUrl,
@@ -223,7 +241,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
     return PopScope(
       canPop: !_canBack,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _web.goBack(); // back = previous page, like a browser
+        if (!didPop) _web?.goBack(); // back = previous page, like a browser
       },
       child: Scaffold(
         appBar: AppBar(
@@ -240,7 +258,19 @@ class _BrowserScreenState extends State<BrowserScreen> {
             ),
           ),
           actions: [
-            IconButton(tooltip: 'Reload', icon: const Icon(Icons.refresh), onPressed: () => _web.reload()),
+            if (_blocked > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Tooltip(
+                  message: 'Ads and redirects blocked on this page',
+                  child: Chip(
+                    avatar: const Icon(Icons.shield_outlined, size: 16),
+                    label: Text('$_blocked'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ),
+            IconButton(tooltip: 'Reload', icon: const Icon(Icons.refresh), onPressed: () => _web?.reload()),
           ],
           bottom: _progress < 100
               ? PreferredSize(
@@ -249,7 +279,35 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 )
               : null,
         ),
-        body: WebViewWidget(controller: _web),
+        body: InAppWebView(
+          initialUrlRequest: URLRequest(url: WebUri.uri(_start)),
+          initialSettings: InAppWebViewSettings(
+            javaScriptEnabled: true,
+            // No pop-up / new windows (ads).
+            javaScriptCanOpenWindowsAutomatically: false,
+            supportMultipleWindows: false,
+            useShouldOverrideUrlLoading: true,
+            contentBlockers: adContentBlockers(),
+            mediaPlaybackRequiresUserGesture: false,
+            thirdPartyCookiesEnabled: true, // some logins need them
+          ),
+          onWebViewCreated: (c) => _web = c,
+          shouldOverrideUrlLoading: (c, action) async => _decide(action),
+          onCreateWindow: (c, action) async {
+            _countBlocked(null); // pop-up window
+            return false;
+          },
+          onLoadStart: (c, url) {
+            if (url != null) _address.text = url.toString();
+            setState(() => _blocked = 0);
+          },
+          onProgressChanged: (c, p) => setState(() => _progress = p),
+          onLoadStop: (c, url) async {
+            if (url != null) _address.text = url.toString();
+            final back = await c.canGoBack();
+            if (mounted) setState(() => _canBack = back);
+          },
+        ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: _finding ? null : _find,
           icon: _finding

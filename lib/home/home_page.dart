@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../account/backup_button.dart';
 import '../diary/diary_store.dart';
 import 'app_share.dart';
 import 'nav_prefs.dart';
@@ -200,6 +201,8 @@ class HomePageState extends State<HomePage> {
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          const BackupCard(),
 
           // ---- Features ----
           Padding(

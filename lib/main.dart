@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'account/account_page.dart';
+import 'account/api_client.dart';
 import 'applock/app_lock_page.dart';
 import 'flashlight_page.dart';
 import 'package:pdfrx/pdfrx.dart' show pdfrxFlutterInitialize;
@@ -106,6 +108,8 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _loadPinned();
+    ApiClient.instance.load(); // shows the logged-in icon right away
+    AccountPage.restoredVersion.addListener(_onRestored);
     // Opened from the daily reel report notification -> show the Reels tab.
     const MethodChannel('abhi_utility/reels').invokeMethod<String>('initialTab').then((tab) {
       if (tab == 'reels' && mounted) setState(() => _tab = _reelsTab);
@@ -154,6 +158,24 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  /// Bumped after a backup restore so the Diary and Tasks pages reload.
+  int _dataVersion = 0;
+
+  void _openAccount() => AccountPage.open(context);
+
+  void _onRestored() {
+    if (!mounted) return;
+    DiaryLock.lockNow();
+    setState(() => _dataVersion++);
+    _homeKey.currentState?.refresh();
+  }
+
+  @override
+  void dispose() {
+    AccountPage.restoredVersion.removeListener(_onRestored);
+    super.dispose();
+  }
+
   void _select(int i) {
     // Leaving App Lock locks it again (password needed next time).
     if (_tab == _lockTab && i != _lockTab) _lockKey.currentState?.relock();
@@ -190,6 +212,14 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
           actions: [
+            ValueListenableBuilder<AccountUser?>(
+              valueListenable: ApiClient.instance.user,
+              builder: (context, user, _) => IconButton(
+                tooltip: user == null ? 'Login / Register' : 'Backup & account',
+                icon: Icon(user == null ? Icons.account_circle_outlined : Icons.cloud_done_outlined),
+                onPressed: _openAccount,
+              ),
+            ),
             IconButton(
               tooltip: 'Share this app',
               icon: const Icon(Icons.share),
@@ -214,9 +244,9 @@ class _HomeShellState extends State<HomeShell> {
             AppLockPage(key: _lockKey),
             const PdfScannerPage(),
             PdfViewerHomePage(key: _viewerKey),
-            const JournalPage(),
+            JournalPage(key: ValueKey('journal$_dataVersion')),
             DownloaderPage(key: _downloaderKey),
-            const TasksPage(),
+            TasksPage(key: ValueKey('tasks$_dataVersion')),
           ],
         ),
         // Home + the features pinned on the Home page. A feature opened from
