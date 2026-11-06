@@ -9,7 +9,8 @@ import 'diary/diary_lock.dart';
 import 'home/app_share.dart';
 import 'home/home_page.dart';
 import 'home/nav_prefs.dart';
-import 'diary/diary_page.dart';
+import 'diary/journal_page.dart';
+import 'diary/tasks_page.dart';
 import 'downloader/downloader_page.dart';
 import 'pdf/pdf_scanner_page.dart';
 import 'pdf/pdf_viewer_page.dart';
@@ -57,6 +58,7 @@ class _HomeShellState extends State<HomeShell> {
   static const _viewerTab = 6;
   static const _diaryTab = 7;
   static const _downloaderTab = 8;
+  static const _tasksTab = 9;
 
   /// Every feature: drives both the Home page cards and the bottom bar.
   static const _features = [
@@ -72,8 +74,10 @@ class _HomeShellState extends State<HomeShell> {
         subtitle: 'Scan papers or photos into a PDF', color: Colors.orange),
     HomeFeature(tab: _viewerTab, icon: Icons.picture_as_pdf_outlined, title: 'PDF Viewer',
         subtitle: 'Open, read, sign & edit PDFs', color: Colors.red),
+    HomeFeature(tab: _tasksTab, icon: Icons.checklist, title: 'Tasks',
+        subtitle: 'Daily to-do list', color: Colors.green),
     HomeFeature(tab: _diaryTab, icon: Icons.menu_book, title: 'Diary',
-        subtitle: 'Daily tasks & private diary', color: Colors.blue),
+        subtitle: 'Private diary with password', color: Colors.blue),
     HomeFeature(tab: _downloaderTab, icon: Icons.download_for_offline_outlined, title: 'Downloader',
         subtitle: 'Save videos & images from links', color: Colors.green),
   ];
@@ -210,8 +214,9 @@ class _HomeShellState extends State<HomeShell> {
             AppLockPage(key: _lockKey),
             const PdfScannerPage(),
             PdfViewerHomePage(key: _viewerKey),
-            const DiaryPage(),
+            const JournalPage(),
             DownloaderPage(key: _downloaderKey),
+            const TasksPage(),
           ],
         ),
         // Home + the features pinned on the Home page. A feature opened from

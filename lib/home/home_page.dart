@@ -195,7 +195,7 @@ class HomePageState extends State<HomePage> {
                   color: Colors.green,
                   value: _tasksTotal == 0 ? '0' : '$_tasksDone/$_tasksTotal',
                   label: _tasksTotal == 0 ? 'tasks today' : 'tasks done today',
-                  onTap: () => widget.onOpen(_tabOf(Icons.menu_book)),
+                  onTap: () => widget.onOpen(_tabOf(Icons.checklist)),
                 ),
               ),
             ],
