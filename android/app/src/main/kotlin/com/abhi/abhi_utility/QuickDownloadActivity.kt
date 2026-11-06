@@ -14,6 +14,11 @@ import io.flutter.plugin.common.MethodChannel
  */
 class QuickDownloadActivity : FlutterActivity() {
 
+    companion object {
+        const val EXTRA_PAGE_URL = "pageUrl"
+        const val EXTRA_SOURCE_APP = "sourceApp"
+    }
+
     override fun getDartEntrypointFunctionName(): String = "quickDownloadMain"
 
     override fun getBackgroundMode(): FlutterActivityLaunchConfigs.BackgroundMode =
@@ -28,6 +33,26 @@ class QuickDownloadActivity : FlutterActivity() {
                     "sharedText" -> result.success(
                         if (intent?.action == Intent.ACTION_SEND) intent.getStringExtra(Intent.EXTRA_TEXT) else null
                     )
+                    // From the ⬇ button: the browser's address bar text and the app's name.
+                    "launchInfo" -> result.success(
+                        mapOf(
+                            "pageUrl" to intent?.getStringExtra(EXTRA_PAGE_URL),
+                            "sourceApp" to intent?.getStringExtra(EXTRA_SOURCE_APP),
+                        )
+                    )
+                    // Copied text + how long ago it was copied (an old link is probably not this video).
+                    "clipboard" -> {
+                        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = cm.primaryClip
+                        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+                        val copiedAt = clip?.description?.timestamp ?: 0L
+                        result.success(
+                            mapOf(
+                                "text" to text,
+                                "ageMs" to if (copiedAt > 0) android.os.SystemClock.elapsedRealtime() - copiedAt else null,
+                            )
+                        )
+                    }
                     "start" -> result.success(
                         Downloads.start(
                             this,

@@ -341,10 +341,14 @@ class ReelCounterService : AccessibilityService() {
                             .putExtra(MainActivity.EXTRA_OPEN, "status")
                     )
                 } else {
-                    // Small panel over the current app: reads the copied link, pick a quality, done.
+                    // Small panel over the current app. In browsers we pass the page
+                    // address (so no copying needed, and a stale copied link isn't used).
+                    val source = anyForegroundPkg
                     startActivity(
                         Intent(this@ReelCounterService, QuickDownloadActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            .putExtra(QuickDownloadActivity.EXTRA_PAGE_URL, readBrowserAddress(source))
+                            .putExtra(QuickDownloadActivity.EXTRA_SOURCE_APP, appLabel(source))
                     )
                 }
             }
@@ -368,6 +372,38 @@ class ReelCounterService : AccessibilityService() {
         } catch (e: Exception) {
             Log.w(TAG, "Could not show download button", e)
         }
+    }
+
+    /** Address-bar view ids of common browsers. */
+    private val browserAddressIds = mapOf(
+        "com.android.chrome" to "url_bar",
+        "com.chrome.beta" to "url_bar",
+        "com.brave.browser" to "url_bar",
+        "com.microsoft.emmx" to "url_bar",
+        "com.kiwibrowser.browser" to "url_bar",
+        "com.vivaldi.browser" to "url_bar",
+        "com.sec.android.app.sbrowser" to "location_bar_edit_text",
+        "org.mozilla.firefox" to "mozac_browser_toolbar_url_view",
+        "com.duckduckgo.mobile.android" to "omnibarTextInput",
+        "com.opera.browser" to "url_field",
+    )
+
+    /** Text of the browser's address bar (full URL or just the domain), or null. */
+    private fun readBrowserAddress(pkg: String?): String? {
+        val id = browserAddressIds[pkg ?: return null] ?: return null
+        return try {
+            val root = rootInActiveWindow ?: return null
+            root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+                .firstNotNullOfOrNull { it.text?.toString()?.trim()?.takeIf { t -> t.isNotEmpty() } }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun appLabel(pkg: String?): String? = try {
+        pkg?.let { packageManager.getApplicationLabel(packageManager.getApplicationInfo(it, 0)).toString() }
+    } catch (_: Exception) {
+        null
     }
 
     private fun hideBubble() {

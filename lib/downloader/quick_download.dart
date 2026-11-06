@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'ad_block.dart' show siteOf;
 import 'link_history.dart';
 import 'media_finder.dart';
 import 'media_list.dart';
@@ -47,23 +48,82 @@ class _QuickPanelState extends State<_QuickPanel> {
     _start();
   }
 
+  /// Question shown before using a copied link that may not be this video.
+  String? _confirm;
+  String? _confirmLink;
+
   Future<void> _start() async {
-    var text = await _channel.invokeMethod<String>('sharedText');
-    if (text == null || extractUrl(text) == null) {
-      // ⬇ button: the clipboard can only be read once this panel has focus.
-      for (var i = 0; i < 5 && (text == null || extractUrl(text) == null); i++) {
-        await Future<void>.delayed(Duration(milliseconds: 150 + i * 150));
-        text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-      }
+    // 1. "Share → Abhi Utility": the link is exactly what the user shared.
+    final shared = await _channel.invokeMethod<String>('sharedText');
+    if (shared != null && extractUrl(shared) != null) return _run(shared);
+
+    // 2. ⬇ in a browser: the address bar tells us the page.
+    final info = await _channel.invokeMapMethod<String, dynamic>('launchInfo') ?? {};
+    final app = (info['sourceApp'] as String?) ?? 'this app';
+    final page = _pageUri(info['pageUrl'] as String?);
+    if (page != null && (page.path.length > 1 || page.query.isNotEmpty)) {
+      return _run(page.toString()); // full address: no copying needed
     }
-    if (text == null || extractUrl(text) == null) {
+
+    // 3. Otherwise the copied link (readable once this panel has focus).
+    Map<String, dynamic>? clip;
+    for (var i = 0; i < 6; i++) {
+      clip = await _channel.invokeMapMethod<String, dynamic>('clipboard');
+      if (extractUrl(clip?['text'] as String? ?? '') != null) break;
+      await Future<void>.delayed(Duration(milliseconds: 120 + i * 120));
+    }
+    final text = clip?['text'] as String? ?? '';
+    final copied = extractUrl(text);
+    if (copied == null) {
       setState(() {
         _loading = false;
-        _error = 'Copy the video\'s link first: in the app tap Share → Copy link, then tap ⬇ again.\n'
-            'Or use Share → Abhi Utility.';
+        _error = 'Copy the video\'s link first: in $app tap Share → Copy link, then tap ⬇ again.\n'
+            'Or use Share → Download with Abhi Utility.';
       });
       return;
     }
+    final ageMs = (clip?['ageMs'] as num?)?.toInt();
+    final fresh = ageMs != null && ageMs < 2 * 60 * 1000;
+    final sameSite = page != null && siteOf(copied.host) == siteOf(page.host);
+
+    if (page != null && !sameSite) {
+      // The copied link is from another site than the page on screen.
+      return _ask(
+        'Your copied link is from ${copied.host}, but $app is on ${page.host}.\n'
+        'Copy this video\'s link (Share → Copy link) and tap ⬇ again.',
+        text,
+      );
+    }
+    if (fresh || sameSite) return _run(text);
+    _ask('Use this copied link?${ageMs != null ? ' (copied ${_ago(ageMs)})' : ''}', text);
+  }
+
+  /// Address-bar text ("example.com/video/1" or a full URL) -> Uri.
+  Uri? _pageUri(String? t) {
+    if (t == null || t.isEmpty || t.contains(' ')) return null;
+    final u = extractUrl(t) ?? (t.contains('.') ? Uri.tryParse('https://$t') : null);
+    return (u == null || u.host.isEmpty) ? null : u;
+  }
+
+  static String _ago(int ms) {
+    final m = ms ~/ 60000;
+    if (m < 60) return '$m min ago';
+    final h = m ~/ 60;
+    return h < 24 ? '$h h ago' : '${h ~/ 24} days ago';
+  }
+
+  void _ask(String question, String link) => setState(() {
+        _loading = false;
+        _confirm = question;
+        _confirmLink = link;
+      });
+
+  Future<void> _run(String text) async {
+    setState(() {
+      _confirm = null;
+      _loading = true;
+      _error = null;
+    });
     _link = text;
     final url = extractUrl(text)!.toString();
     try {
@@ -76,6 +136,14 @@ class _QuickPanelState extends State<_QuickPanel> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// "pexels.com/video/sunset-123…" for showing which link is used.
+  String _short(String text) {
+    final u = extractUrl(text);
+    if (u == null) return text;
+    final s = '${u.host}${u.path}';
+    return s.length > 48 ? '${s.substring(0, 48)}…' : s;
   }
 
   Future<void> _download(MediaOption o) async {
@@ -149,8 +217,11 @@ class _QuickPanelState extends State<_QuickPanel> {
                             IconButton(tooltip: 'Close', onPressed: _close, icon: const Icon(Icons.close)),
                           ],
                         ),
-                        if (_result != null)
-                          Text(_result!.pageUrl.host, style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+                        if (_link != null && _confirm == null)
+                          Text('🔗 ${_short(_link!)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
                         const SizedBox(height: 8),
                         Flexible(child: _body(scheme)),
                       ],
@@ -171,6 +242,34 @@ class _QuickPanelState extends State<_QuickPanel> {
         leading: const Icon(Icons.check_circle, color: Colors.green),
         title: Text('Downloading $_started…'),
         subtitle: const Text('Progress is in the notification. Saved to Downloads/AbhiUtility.'),
+      );
+    }
+    if (_confirm != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(_confirm!),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(10)),
+            child: Text('🔗 ${_short(_confirmLink!)}', maxLines: 2, overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: OutlinedButton(onPressed: _close, child: const Text('Close'))),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _run(_confirmLink!),
+                  child: const Text('Use this link'),
+                ),
+              ),
+            ],
+          ),
+        ],
       );
     }
     if (_loading) {
