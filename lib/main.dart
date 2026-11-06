@@ -187,6 +187,8 @@ class _HomeShellState extends State<HomeShell> {
     if (_tab == _lockTab && i != _lockTab) _lockKey.currentState?.relock();
     // Leaving the Diary tab locks the diary (if it has a password).
     if (_tab == _diaryTab && i != _diaryTab) DiaryLock.lockNow();
+    // Leaving the Downloader clears the link box (the link stays in Recent links).
+    if (_tab == _downloaderTab && i != _downloaderTab) _downloaderKey.currentState?.reset();
     setState(() => _tab = i);
     if (i == _homeTab) _homeKey.currentState?.refresh();
     if (i == _reelsTab) _reelsKey.currentState?.refresh();

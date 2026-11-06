@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'link_history.dart';
 import 'media_finder.dart';
 
 /// Quick download panel shown over another app (QuickDownloadActivity): finds
@@ -63,10 +64,13 @@ class _QuickPanelState extends State<_QuickPanel> {
       return;
     }
     _link = text;
+    final url = extractUrl(text)!.toString();
     try {
       final r = await findMedia(text);
+      await LinkHistory.add(url, title: r.title); // shows up in Downloader → Recent links
       if (mounted) setState(() => _result = r);
     } on FinderException catch (e) {
+      await LinkHistory.add(url);
       if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _loading = false);

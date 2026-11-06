@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'browser_screen.dart';
+import 'link_history.dart';
 import 'media_finder.dart';
 import 'status_saver_screen.dart';
 
@@ -35,7 +36,14 @@ class _Download {
   bool get active => status == 'running' || status == 'pending' || status == 'paused';
 }
 
-class DownloaderPageState extends State<DownloaderPage> {
+class DownloaderPageState extends State<DownloaderPage> with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Leaving the app also starts the next visit with an empty link box.
+    if (state == AppLifecycleState.paused && !_finding) reset();
+    if (state == AppLifecycleState.resumed) _loadHistory();
+  }
+
   static const channel = MethodChannel('abhi_utility/downloader');
 
   final _link = TextEditingController();
@@ -45,11 +53,14 @@ class DownloaderPageState extends State<DownloaderPage> {
   List<_Download> _downloads = [];
   bool _bubble = true;
   Timer? _poll;
+  List<HistoryLink> _history = [];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadDownloads();
+    _loadHistory();
     channel.invokeMethod<bool>('bubbleEnabled').then((v) {
       if (mounted) setState(() => _bubble = v ?? true);
     });
@@ -67,6 +78,57 @@ class DownloaderPageState extends State<DownloaderPage> {
     } else if (launch['action'] == 'status') {
       _openStatusSaver();
     }
+  }
+
+  /// Called when the user leaves the Downloader: next time it opens with an
+  /// empty link box (the link is kept in Recent links).
+  void reset() {
+    if (!mounted) return;
+    setState(() {
+      _link.clear();
+      _result = null;
+      _error = null;
+    });
+    _loadHistory();
+  }
+
+  // ---- Link history -------------------------------------------------------------------
+
+  Future<void> _loadHistory() async {
+    final h = await LinkHistory.load();
+    if (mounted) setState(() => _history = h);
+  }
+
+  Future<void> _removeHistory(HistoryLink l) async {
+    await LinkHistory.remove(l.url);
+    await _loadHistory();
+    _snack('Removed from history');
+  }
+
+  Future<void> _clearHistory() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear link history?'),
+        content: Text('All ${_history.length} saved links will be deleted. Downloaded files are kept.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await LinkHistory.clear();
+    await _loadHistory();
+  }
+
+  static String _when(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inHours < 1) return '${d.inMinutes} min ago';
+    if (d.inDays < 1) return '${d.inHours} h ago';
+    if (d.inDays < 7) return '${d.inDays} d ago';
+    return '${t.day}/${t.month}/${t.year}';
   }
 
   void _openStatusSaver() {
@@ -118,14 +180,18 @@ class DownloaderPageState extends State<DownloaderPage> {
       _error = null;
       _result = null;
     });
+    final url = extractUrl(_link.text)?.toString();
     try {
       final r = await findMedia(_link.text);
+      if (url != null) await LinkHistory.add(url, title: r.title);
       if (!mounted) return;
       setState(() => _result = r);
     } on FinderException catch (e) {
+      if (url != null) await LinkHistory.add(url);
       if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _finding = false);
+      _loadHistory();
     }
   }
 
@@ -331,6 +397,49 @@ class DownloaderPageState extends State<DownloaderPage> {
             ),
           ),
 
+          if (_history.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text('Recent links', style: Theme.of(context).textTheme.titleMedium),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _clearHistory,
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                  label: const Text('Clear all'),
+                ),
+              ],
+            ),
+            Card(
+              child: Column(
+                children: [
+                  for (final l in _history.take(10))
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.history),
+                      title: Text(l.title ?? l.host, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text('${l.host} · ${_when(l.time)}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                      onTap: () {
+                        _link.text = l.url;
+                        _find();
+                      },
+                      trailing: IconButton(
+                        tooltip: 'Delete from history',
+                        icon: const Icon(Icons.close, size: 20),
+                        onPressed: () => _removeHistory(l),
+                      ),
+                    ),
+                  if (_history.length > 10)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('+ ${_history.length - 10} older links',
+                          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+                    ),
+                ],
+              ),
+            ),
+          ],
+
           const SizedBox(height: 16),
           Row(
             children: [
@@ -471,6 +580,7 @@ class DownloaderPageState extends State<DownloaderPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
     _link.dispose();
     super.dispose();
