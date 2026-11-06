@@ -333,13 +333,20 @@ class ReelCounterService : AccessibilityService() {
             }
             contentDescription = "Download this video with Abhi Utility"
             setOnClickListener {
-                // WhatsApp -> Status Saver; elsewhere the Downloader reads the copied link.
-                val target = if (anyForegroundPkg in WHATSAPP_APPS) "status" else "downloader"
-                startActivity(
-                    Intent(this@ReelCounterService, MainActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        .putExtra(MainActivity.EXTRA_OPEN, target)
-                )
+                if (anyForegroundPkg in WHATSAPP_APPS) {
+                    // WhatsApp statuses have no link: open the Status Saver.
+                    startActivity(
+                        Intent(this@ReelCounterService, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            .putExtra(MainActivity.EXTRA_OPEN, "status")
+                    )
+                } else {
+                    // Small panel over the current app: reads the copied link, pick a quality, done.
+                    startActivity(
+                        Intent(this@ReelCounterService, QuickDownloadActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
             }
         }
         val size = dp(42f)

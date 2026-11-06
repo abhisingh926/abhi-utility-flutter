@@ -14,11 +14,17 @@ import 'home/nav_prefs.dart';
 import 'diary/journal_page.dart';
 import 'diary/tasks_page.dart';
 import 'downloader/downloader_page.dart';
+import 'downloader/quick_download.dart';
 import 'pdf/pdf_scanner_page.dart';
 import 'pdf/pdf_viewer_page.dart';
 import 'pdf/pdf_store.dart';
 import 'reels/reels_page.dart';
 import 'vpn/vpn_page.dart';
+
+/// Entry point of the quick download panel (QuickDownloadActivity): a small
+/// panel over the current app instead of the full Abhi Utility.
+@pragma('vm:entry-point')
+void quickDownloadMain() => runApp(const QuickDownloadApp());
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

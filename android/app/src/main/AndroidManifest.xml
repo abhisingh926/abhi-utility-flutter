@@ -32,12 +32,6 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- "Share → Abhi Utility" for links (video / image downloader). -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <data android:mimeType="text/plain"/>
-            </intent-filter>
             <!-- "Open with → Abhi Utility" for PDF files. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -48,6 +42,24 @@
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:scheme="file" android:mimeType="application/pdf"/>
+            </intent-filter>
+        </activity>
+        <!-- Quick download panel over the current app (⬇ button / "Share → Abhi Utility"). -->
+        <activity
+            android:name=".QuickDownloadActivity"
+            android:exported="true"
+            android:label="Download with Abhi Utility"
+            android:theme="@style/QuickDownloadTheme"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
         <service
