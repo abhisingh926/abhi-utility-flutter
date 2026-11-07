@@ -111,7 +111,7 @@ class ApiClient {
 
   static const baseUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://purple-koala-695199.hostingersite.com',
+    defaultValue: 'https://palegreen-whale-996077.hostingersite.com',
   );
 
   static const _kAccess = 'account:access';
