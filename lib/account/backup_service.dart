@@ -102,6 +102,42 @@ class BackupService {
     await p.setString('account:lastBackup', DateTime.now().toIso8601String());
   }
 
+  // ---- Sync later (server not live / no internet) ---------------------------------
+
+  static const _kPending = 'account:pendingSync';
+
+  /// A backup is waiting because the server couldn't be reached.
+  static Future<bool> pendingSync() async =>
+      (await SharedPreferences.getInstance()).getBool(_kPending) ?? false;
+
+  static Future<void> _setPending(bool v) async =>
+      (await SharedPreferences.getInstance()).setBool(_kPending, v);
+
+  /// Backs up now; if the server is offline, remembers to sync later instead of
+  /// failing. Returns true when the backup reached the server.
+  static Future<bool> syncNow({void Function(String)? progress}) async {
+    try {
+      await backupNow(progress: progress);
+      await _setPending(false);
+      return true;
+    } on ApiException catch (e) {
+      if (!e.serverOffline) rethrow;
+      await _setPending(true);
+      return false;
+    }
+  }
+
+  /// Called when the app opens: finishes a waiting sync once the server is live.
+  static Future<void> syncIfPending() async {
+    final api = ApiClient.instance;
+    await api.load();
+    if (!api.isLoggedIn || !await pendingSync()) return;
+    if (!await api.serverReachable()) return;
+    try {
+      await syncNow();
+    } catch (_) {/* try again next time */}
+  }
+
   static Future<DateTime?> lastBackup() async {
     final raw = (await SharedPreferences.getInstance()).getString('account:lastBackup');
     return raw == null ? null : DateTime.tryParse(raw);

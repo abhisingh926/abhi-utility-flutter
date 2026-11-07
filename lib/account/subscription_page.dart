@@ -44,6 +44,10 @@ class _PaywallViewState extends State<PaywallView> {
   final _subs = SubscriptionService.instance;
   bool _checking = false;
   String? _checkError;
+  bool _checkOffline = false;
+
+  /// null = checking, false = the backend isn't reachable (not live yet / no internet).
+  bool? _serverUp;
 
   @override
   void initState() {
@@ -54,6 +58,55 @@ class _PaywallViewState extends State<PaywallView> {
         _subs.loadProducts();
       }
     });
+    _checkServer();
+  }
+
+  Future<void> _checkServer() async {
+    setState(() => _serverUp = null);
+    final up = await _api.serverReachable();
+    if (mounted) setState(() => _serverUp = up);
+  }
+
+  Future<void> _useOffline() async {
+    await _api.startOffline();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      duration: Duration(seconds: 5),
+      content: Text('Using the app offline. Everything is saved on this phone; register and sync when the server is live.'),
+    ));
+  }
+
+  /// Shown instead of an error when the server can't be reached.
+  List<Widget> _offlineCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final daysLeft = _api.offlineDaysLeft;
+    return [
+      Icon(Icons.cloud_off_outlined, size: 64, color: scheme.primary),
+      const SizedBox(height: 12),
+      Text("The cloud server isn't live yet", textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: 8),
+      Text(
+        daysLeft > 0
+            ? 'You can use every feature now; everything is saved on this phone. '
+                'When the server is live, register and tap Sync to back it up.'
+            : 'The offline period has ended. Register when the server is live to keep using the app.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
+      const SizedBox(height: 20),
+      if (daysLeft > 0)
+        FilledButton.icon(
+          onPressed: _useOffline,
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+          icon: const Icon(Icons.offline_bolt_outlined),
+          label: Text('Use the app offline ($daysLeft days)'),
+        ),
+      TextButton.icon(
+        onPressed: _checkServer,
+        icon: const Icon(Icons.refresh),
+        label: const Text('Check again'),
+      ),
+    ];
   }
 
   Future<void> _check() async {
@@ -64,7 +117,12 @@ class _PaywallViewState extends State<PaywallView> {
     try {
       await _api.refreshAccount();
     } on ApiException catch (e) {
-      if (mounted) setState(() => _checkError = e.message);
+      if (mounted) {
+        setState(() {
+          _checkOffline = e.serverOffline;
+          _checkError = e.message;
+        });
+      }
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -89,7 +147,9 @@ class _PaywallViewState extends State<PaywallView> {
               constraints: const BoxConstraints(maxWidth: 440),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: user == null ? _loggedOut(context) : _loggedIn(context, ent),
+                children: user == null
+                    ? (_serverUp == false ? _offlineCard(context) : _loggedOut(context))
+                    : (ent == null && _checkOffline && !_checking ? _offlineCard(context) : _loggedIn(context, ent)),
               ),
             ),
           ),

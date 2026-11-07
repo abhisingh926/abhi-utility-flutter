@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'account/backup_service.dart';
 import 'account/account_page.dart';
 import 'account/api_client.dart';
 import 'account/subscription_page.dart';
@@ -115,6 +116,8 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    // A backup that couldn't reach the server earlier: send it now if the server is live.
+    BackupService.syncIfPending();
     _loadPinned();
     // Saved login + trial status first (works offline), then the latest from the server.
     ApiClient.instance.load().then((_) => _refreshAccount());
@@ -279,7 +282,8 @@ class _HomeShellState extends State<HomeShell> {
             ),
             if (_tab != _homeTab)
               ListenableBuilder(
-                listenable: Listenable.merge([ApiClient.instance.user, ApiClient.instance.entitlement]),
+                listenable: Listenable.merge(
+                    [ApiClient.instance.user, ApiClient.instance.entitlement, ApiClient.instance.offlineMode]),
                 builder: (context, _) => ApiClient.instance.hasAccess
                     ? const SizedBox.shrink()
                     : Material(

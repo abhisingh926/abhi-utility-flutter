@@ -12,9 +12,16 @@ class ApiException implements Exception {
   final String message;
   final Map<String, dynamic>? body;
 
+  /// The backend can't be reached (no internet, or not deployed yet): not a
+  /// real error. The app keeps working on this phone and syncs later.
+  bool get serverOffline => code == 'server_offline';
+
   @override
   String toString() => message;
 }
+
+const _offlineMessage = 'The cloud server is not available right now. '
+    'Your data is safe on this phone; you can sync it when the server is live.';
 
 /// Logged-in user (subset of the backend's publicUser).
 class AccountUser {
@@ -111,6 +118,11 @@ class ApiClient {
   static const _kRefresh = 'account:refresh';
   static const _kUser = 'account:user';
   static const _kEntitlement = 'account:entitlement';
+  static const _kOffline = 'account:offline';
+  static const _kOfflineSince = 'account:offlineSince';
+
+  /// How long the app may be used without the server (before it is live).
+  static const offlineDays = 30;
 
   String? _access;
   String? _refresh;
@@ -122,8 +134,47 @@ class ApiClient {
   /// Free trial / Pro status of the logged-in user (null = logged out or not known yet).
   final entitlement = ValueNotifier<Entitlement?>(null);
 
+  /// "Use the app offline" was chosen because the server wasn't reachable.
+  final offlineMode = ValueNotifier<bool>(false);
+  DateTime? _offlineSince;
+
+  /// Offline use is allowed for [offlineDays] from the first time it was chosen.
+  bool get offlineAccess =>
+      offlineMode.value &&
+      _offlineSince != null &&
+      DateTime.now().difference(_offlineSince!).inDays < offlineDays;
+
+  int get offlineDaysLeft => _offlineSince == null
+      ? offlineDays
+      : (offlineDays - DateTime.now().difference(_offlineSince!).inDays).clamp(0, offlineDays);
+
   /// May the features be used right now?
-  bool get hasAccess => isLoggedIn && (entitlement.value?.active ?? false);
+  bool get hasAccess => (isLoggedIn && (entitlement.value?.active ?? false)) || offlineAccess;
+
+  /// Use the app without the server (it isn't live yet). Sync later.
+  Future<void> startOffline() async {
+    final prefs = await SharedPreferences.getInstance();
+    _offlineSince ??= DateTime.now(); // the 30 days count from the very first time
+    await prefs.setString(_kOfflineSince, _offlineSince!.toIso8601String());
+    await prefs.setBool(_kOffline, true);
+    offlineMode.value = true;
+  }
+
+  Future<void> _endOffline() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kOffline, false); // offlineSince is kept: no second 30 days
+    offlineMode.value = false;
+  }
+
+  /// True when the backend answers its health check.
+  Future<bool> serverReachable() async {
+    try {
+      final res = await http.get(Uri.parse('$baseUrl/api/health')).timeout(const Duration(seconds: 10));
+      return res.statusCode == 200 && (jsonDecode(res.body) as Map)['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   bool get isLoggedIn => _refresh != null;
 
@@ -132,6 +183,8 @@ class ApiClient {
     final prefs = await SharedPreferences.getInstance();
     _access = prefs.getString(_kAccess);
     _refresh = prefs.getString(_kRefresh);
+    _offlineSince = DateTime.tryParse(prefs.getString(_kOfflineSince) ?? '');
+    offlineMode.value = prefs.getBool(_kOffline) ?? false;
     final raw = prefs.getString(_kUser);
     if (_refresh != null && raw != null) {
       user.value = AccountUser.fromJson(jsonDecode(raw) as Map<String, dynamic>);
@@ -157,6 +210,7 @@ class ApiClient {
       user.value = u;
     }
     if (j['entitlement'] is Map) await setEntitlement(j['entitlement'] as Map<String, dynamic>);
+    if (offlineMode.value) await _endOffline(); // the server works: back to normal
   }
 
   /// Saves the entitlement from any backend answer (`/me`, login, purchases).
@@ -275,7 +329,14 @@ class ApiClient {
   Future<http.Response> _authed(Future<http.Response> Function() call) async {
     await load();
     if (_refresh == null) throw ApiException(401, 'not_logged_in', 'Please log in first');
-    var res = await call();
+    http.Response res;
+    try {
+      res = await call();
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw ApiException(0, 'server_offline', _offlineMessage); // no connection
+    }
     if (res.statusCode == 401 && await _refreshTokens()) res = await call();
     if (res.statusCode == 401) await _clearSession();
     return res;
@@ -302,7 +363,7 @@ class ApiClient {
     } on ApiException {
       rethrow;
     } catch (e) {
-      throw ApiException(0, 'network', 'Could not reach the server. Check your internet connection.');
+      throw ApiException(0, 'server_offline', _offlineMessage);
     }
     if (res.statusCode >= 400) throw _error(res);
     if (res.body.isEmpty) return {};
@@ -316,9 +377,8 @@ class ApiClient {
       return ApiException(res.statusCode, err['code'] as String? ?? 'error',
           err['message'] as String? ?? 'Something went wrong', {...err, ...j});
     } catch (_) {
-      // Not our JSON: usually the backend isn't deployed at this address.
-      return ApiException(res.statusCode, 'error',
-          'Backup server not found at $baseUrl (error ${res.statusCode}). Is the backend running there?');
+      // Not our JSON (e.g. the host's 404 page): the backend isn't live there yet.
+      return ApiException(res.statusCode, 'server_offline', _offlineMessage);
     }
   }
 }

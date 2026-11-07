@@ -102,6 +102,20 @@ class _AuthFormState extends State<_AuthForm> {
   bool _showPassword = false;
   String? _error;
 
+  /// The server isn't reachable (not live yet): offer to use the app offline.
+  bool _serverOffline = false;
+
+  Future<void> _useOffline() async {
+    final messenger = ScaffoldMessenger.of(context);
+    await ApiClient.instance.startOffline();
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    messenger.showSnackBar(const SnackBar(
+      duration: Duration(seconds: 5),
+      content: Text('Using the app offline. Everything is saved on this phone; register and sync when the server is live.'),
+    ));
+  }
+
   @override
   void dispose() {
     for (final c in [_name, _email, _password, _confirm]) {
@@ -115,6 +129,7 @@ class _AuthFormState extends State<_AuthForm> {
     setState(() {
       _busy = true;
       _error = null;
+      _serverOffline = false;
     });
     try {
       final email = _email.text.trim();
@@ -137,7 +152,12 @@ class _AuthFormState extends State<_AuthForm> {
                 : 'Logged in'),
       ));
     } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) {
+        setState(() {
+          _serverOffline = e.serverOffline;
+          _error = e.serverOffline ? null : e.message;
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -240,6 +260,36 @@ class _AuthFormState extends State<_AuthForm> {
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   Text(_error!, style: TextStyle(color: scheme.error), textAlign: TextAlign.center),
+                ],
+                if (_serverOffline) ...[
+                  const SizedBox(height: 12),
+                  Card(
+                    color: scheme.surfaceContainerHighest,
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.cloud_off_outlined),
+                              SizedBox(width: 8),
+                              Expanded(child: Text("The cloud server isn't live yet", style: TextStyle(fontWeight: FontWeight.bold))),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          const Text('You can use the app now; everything stays on this phone. '
+                              'Register and sync once the server is live.'),
+                          const SizedBox(height: 10),
+                          OutlinedButton.icon(
+                            onPressed: _useOffline,
+                            icon: const Icon(Icons.offline_bolt_outlined),
+                            label: const Text('Use the app offline'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
                 const SizedBox(height: 20),
                 FilledButton(
@@ -379,13 +429,20 @@ class _BackupViewState extends State<_BackupView> {
   String? _loadError;
   String? _status; // non-null while backing up / restoring
 
+  /// Server not reachable (not live yet / no internet): data stays on the phone.
+  bool _offline = false;
+
+  /// A backup is waiting to be synced to the server.
+  bool _pending = false;
+
   @override
   void initState() {
     super.initState();
-    _refresh();
+    BackupService.syncIfPending().whenComplete(_refresh);
   }
 
   Future<void> _refresh() async {
+    final pending = await BackupService.pendingSync();
     try {
       final r = await BackupService.list();
       if (!mounted) return;
@@ -394,24 +451,48 @@ class _BackupViewState extends State<_BackupView> {
         _used = r.usedBytes;
         _quota = r.quotaBytes;
         _loadError = null;
+        _offline = false;
+        _pending = pending;
       });
     } on ApiException catch (e) {
-      if (mounted) setState(() => _loadError = e.message);
+      if (!mounted) return;
+      setState(() {
+        _offline = e.serverOffline;
+        _loadError = e.serverOffline ? null : e.message;
+        _pending = pending;
+      });
     }
+  }
+
+  /// Back up / sync; when the server is offline it's queued instead of failing.
+  Future<void> _sync() async {
+    var synced = false;
+    await _work((p) async {
+      synced = await BackupService.syncNow(progress: p);
+    }, null);
+    if (!mounted) return;
+    _snack(synced
+        ? '✅ Synced to the server'
+        : 'Server not reachable. Your data is safe on this phone; it will sync when the server is live.');
   }
 
   void _snack(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
-  Future<void> _work(Future<void> Function(void Function(String)) job, String done) async {
+  Future<void> _work(Future<void> Function(void Function(String)) job, String? done) async {
     setState(() => _status = 'Starting…');
     try {
       await job((s) {
         if (mounted) setState(() => _status = s);
       });
-      _snack(done);
+      if (done != null) _snack(done);
       await _refresh();
     } on ApiException catch (e) {
-      _snack(e.message);
+      if (e.serverOffline) {
+        if (mounted) setState(() => _offline = true);
+        _snack('Server not reachable right now. Your data is safe on this phone; try Sync later.');
+      } else {
+        _snack(e.message);
+      }
     } catch (e) {
       _snack('Failed: $e');
     } finally {
@@ -524,14 +605,12 @@ class _BackupViewState extends State<_BackupView> {
                   ],
                   const SizedBox(height: 12),
                   FilledButton.icon(
-                    onPressed: busy
-                        ? null
-                        : () => _work((p) => BackupService.backupNow(progress: p), '✅ Backup saved'),
+                    onPressed: busy ? null : _sync,
                     style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                     icon: busy
                         ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.cloud_upload_outlined),
-                    label: Text(_status ?? 'Back up now'),
+                    label: Text(_status ?? (_offline || _pending ? 'Sync now' : 'Back up now')),
                   ),
                 ],
               ),
@@ -540,7 +619,27 @@ class _BackupViewState extends State<_BackupView> {
           const SizedBox(height: 16),
           Text('Your backups', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          if (_loadError != null)
+          if (_offline)
+            Card(
+              color: scheme.surfaceContainerHighest,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_off_outlined, size: 32, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _pending
+                            ? 'Server offline. A sync is waiting and will run automatically when the server is live.'
+                            : 'Server offline. Your diary and tasks are safe on this phone. Tap "Sync now" when the server is live.',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else if (_loadError != null)
             ListTile(
               leading: Icon(Icons.error_outline, color: scheme.error),
               title: Text(_loadError!),
