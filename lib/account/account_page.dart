@@ -121,7 +121,7 @@ class _AuthFormState extends State<_AuthForm> {
 
   @override
   void dispose() {
-    for (final c in [_name, _email, _password, _confirm]) {
+    for (final c in [_name, _email, _password, _confirm, _referral]) {
       c.dispose();
     }
     super.dispose();
@@ -372,6 +372,14 @@ class _ForgotPasswordPageState extends State<_ForgotPasswordPage> {
   bool _busy = false;
   String? _message;
   String? _error;
+
+  @override
+  void dispose() {
+    for (final c in [_email, _code, _password]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
 
   Future<void> _run(Future<void> Function() action) async {
     setState(() {

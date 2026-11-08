@@ -684,6 +684,14 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   bool _show = false;
   String? _error;
 
+  @override
+  void dispose() {
+    for (final c in [_current, _new, _confirm]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   Future<void> _save() async {
     if (_new.text.length < 8) return setState(() => _error = 'New password: at least 8 characters');
     if (_new.text != _confirm.text) return setState(() => _error = "The new passwords don't match");

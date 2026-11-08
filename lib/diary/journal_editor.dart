@@ -92,7 +92,8 @@ class _JournalEditorState extends State<JournalEditor> with WidgetsBindingObserv
     } finally {
       DiaryLock.pickingPhoto = false;
     }
-    if (files.isEmpty) return;
+    // Away too long: the diary locked and this entry was saved and closed.
+    if (files.isEmpty || _closing || !mounted) return;
     setState(() => _busy = true);
     try {
       for (final f in files) {

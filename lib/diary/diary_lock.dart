@@ -29,10 +29,28 @@ class DiaryLock {
   static void unlockAll() {
     appLockUnlocked.value = true;
     unlocked.value = true;
+    _setPrivate(true);
   }
 
   /// Diary password / fingerprint: opens only the Diary.
-  static void unlockDiary() => unlocked.value = true;
+  static void unlockDiary() {
+    unlocked.value = true;
+    _setPrivate(true);
+  }
+
+  // ---- Recent apps thumbnail ------------------------------------------------------------
+  // While the Diary or App Lock is open, Android's Recents screen must not show
+  // a picture of it. Turned off again on the next resume once locked (not at the
+  // moment of locking: the thumbnail is taken as the app leaves, before the
+  // lock screen is drawn).
+
+  static bool _private = false;
+
+  static void _setPrivate(bool on) {
+    if (_private == on) return;
+    _private = on;
+    const MethodChannel('abhi_utility/app').invokeMethod('setPrivate', {'on': on}).catchError((_) {});
+  }
 
   /// Changes when the Diary and App Lock lock again (app left, lock button, restore).
   static final relock = ValueNotifier<int>(0);
@@ -50,9 +68,26 @@ class DiaryLock {
   /// True while Abhi Utility itself opens a system screen (e.g. "Activate device admin").
   static bool openingSystemScreen = false;
 
+  /// Away longer than this for the photo picker / a system screen: the user
+  /// probably left from there (Home, Recents), so lock when the app comes back.
+  static const maxAwayForPicker = Duration(minutes: 3);
+  static DateTime? _awaySince;
+
   /// The app went to the background: lock, unless we sent the user there ourselves.
   static void onAppPaused() {
-    if (!pickingPhoto && !openingSystemScreen) lockNow();
+    if (!pickingPhoto && !openingSystemScreen) {
+      lockNow();
+    } else {
+      _awaySince ??= DateTime.now();
+    }
+  }
+
+  /// The app is back in front.
+  static void onAppResumed() {
+    final since = _awaySince;
+    _awaySince = null;
+    if (since != null && DateTime.now().difference(since) > maxAwayForPicker) lockNow();
+    if (!unlocked.value && !appLockUnlocked.value) _setPrivate(false);
   }
 
   static const _appLock = MethodChannel('abhi_utility/applock');

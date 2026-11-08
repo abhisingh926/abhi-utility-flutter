@@ -347,6 +347,19 @@ class MainActivity : FlutterFragmentActivity() {
                 "info" -> result.success(
                     mapOf("version" to AppShare.versionName(this), "apkSize" to AppShare.apkSize(this))
                 )
+                // Diary / App Lock open: no picture of the app in Recents. Android 13+ can
+                // do that alone; older versions need FLAG_SECURE (also blocks screenshots).
+                "setPrivate" -> {
+                    val on = call.argument<Boolean>("on") ?: false
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        setRecentsScreenshotEnabled(!on)
+                    } else if (on) {
+                        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                    result.success(null)
+                }
                 // Survives "Clear data" (only a reinstall resets it): limits offline use.
                 "firstInstallTime" -> result.success(
                     packageManager.getPackageInfo(packageName, 0).firstInstallTime

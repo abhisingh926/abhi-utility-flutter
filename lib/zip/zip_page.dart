@@ -242,6 +242,14 @@ class _CreateSheetState extends State<_CreateSheet> {
   bool _hide = true;
   String? _error;
 
+  @override
+  void dispose() {
+    for (final c in [_name, _pass, _pass2]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   void _submit() {
     if (_name.text.trim().isEmpty) return setState(() => _error = 'Enter a name');
     if (_lock) {
