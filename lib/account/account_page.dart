@@ -5,6 +5,7 @@ import 'backup_service.dart';
 import 'subscription_page.dart';
 import 'subscription_service.dart';
 import 'user_avatar.dart';
+import 'verify_email_page.dart';
 
 /// Account: login / register when logged out, cloud backup when logged in.
 /// Pops with `true` if a backup was restored (so the diary/tasks reload).
@@ -137,11 +138,25 @@ class _AuthFormState extends State<_AuthForm> {
       final email = _email.text.trim();
       // The snack bar must outlive this page (it may close itself after login).
       final messenger = ScaffoldMessenger.of(context);
+      // This page may close itself on login: open "Confirm your email" from the app's navigator.
+      final nav = Navigator.of(context, rootNavigator: true);
       final days = SubscriptionService.instance.trialDays;
       final bool trialStarted;
       if (_register) {
         trialStarted = await ApiClient.instance.register(
             email: email, password: _password.text, name: _name.text.trim(), referralCode: _referral.text);
+        // The trial (and a referral code) start once the email is confirmed.
+        if (!(ApiClient.instance.user.value?.emailVerified ?? true)) {
+          messenger.showSnackBar(const SnackBar(
+            duration: Duration(seconds: 5),
+            content: Text('Account created — enter the code we emailed you to start your free trial.'),
+          ));
+          nav.push(MaterialPageRoute(
+            builder: (_) => VerifyEmailPage(
+                justRegistered: true, sendFailed: ApiClient.instance.lastVerificationSendFailed),
+          ));
+          return;
+        }
         final ref = ApiClient.instance.lastReferral;
         if (ref != null && ref['applied'] != true) {
           // Account made, but the code couldn't be used (e.g. this email used one before).

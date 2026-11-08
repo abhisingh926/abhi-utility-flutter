@@ -4,6 +4,7 @@ import 'package:in_app_purchase/in_app_purchase.dart';
 import 'account_page.dart';
 import 'api_client.dart';
 import 'subscription_service.dart';
+import 'verify_email_page.dart';
 
 String _day(DateTime d) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -149,7 +150,11 @@ class _PaywallViewState extends State<PaywallView> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: user == null
                     ? (_serverUp == false ? _offlineCard(context) : _loggedOut(context))
-                    : (ent == null && _checkOffline && !_checking ? _offlineCard(context) : _loggedIn(context, ent)),
+                    : (ent == null && _checkOffline && !_checking
+                        ? _offlineCard(context)
+                        : !user.emailVerified && !(ent?.active ?? false)
+                            ? _confirmEmail(context, user)
+                            : _loggedIn(context, ent)),
               ),
             ),
           ),
@@ -187,6 +192,31 @@ class _PaywallViewState extends State<PaywallView> {
       TextButton(
         onPressed: () => _openAccount(register: false),
         child: const Text('Already have an account? Log in'),
+      ),
+    ];
+  }
+
+  // ---- Registered, email not confirmed yet: the trial waits for it --------------------
+
+  List<Widget> _confirmEmail(BuildContext context, AccountUser user) {
+    final scheme = Theme.of(context).colorScheme;
+    return [
+      Icon(Icons.mark_email_unread_outlined, size: 64, color: scheme.primary),
+      const SizedBox(height: 12),
+      Text('Confirm your email', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: 8),
+      Text(
+        'Your ${_subs.trialDays}-day free trial starts as soon as you confirm ${user.email} '
+        'with the 6-digit code we emailed you.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
+      const SizedBox(height: 20),
+      FilledButton.icon(
+        onPressed: () => VerifyEmailPage.open(context),
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+        icon: const Icon(Icons.pin_outlined),
+        label: const Text('Enter the code'),
       ),
     ];
   }

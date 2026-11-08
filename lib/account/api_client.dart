@@ -26,18 +26,24 @@ const _offlineMessage = 'The cloud server is not available right now. '
 
 /// Logged-in user (subset of the backend's publicUser).
 class AccountUser {
-  AccountUser({required this.id, required this.email, this.name, this.accountToken, this.avatarVersion});
+  AccountUser(
+      {required this.id, required this.email, this.name, this.accountToken, this.avatarVersion, this.emailVerified = true});
 
   factory AccountUser.fromJson(Map<String, dynamic> j) => AccountUser(
       id: j['id'] as int,
       email: j['email'] as String,
       name: j['name'] as String?,
       accountToken: j['accountToken'] as String?,
-      avatarVersion: j['avatarVersion'] as String?);
+      avatarVersion: j['avatarVersion'] as String?,
+      // Older servers / saved copies don't say: treat as confirmed.
+      emailVerified: j['emailVerified'] != false);
 
   final int id;
   final String email;
   final String? name;
+
+  /// The email was confirmed with the emailed code (needed for the free trial).
+  final bool emailVerified;
 
   /// Changes whenever the profile photo changes; null = no photo.
   final String? avatarVersion;
@@ -46,7 +52,14 @@ class AccountUser {
   final String? accountToken;
 
   Map<String, dynamic> toJson() =>
-      {'id': id, 'email': email, 'name': name, 'accountToken': accountToken, 'avatarVersion': avatarVersion};
+      {
+        'id': id,
+        'email': email,
+        'name': name,
+        'accountToken': accountToken,
+        'avatarVersion': avatarVersion,
+        'emailVerified': emailVerified,
+      };
 }
 
 /// Whether the user may use the app: free trial or paid Pro (backend `entitlement`).
@@ -331,7 +344,35 @@ class ApiClient {
         auth: false);
     await _saveSession(j);
     lastReferral = j['referral'] is Map ? j['referral'] as Map<String, dynamic> : null;
+    lastVerificationSendFailed = j['verificationSendFailed'] == true;
     return j['trialStarted'] == true;
+  }
+
+  /// The sign-up confirmation email could not be sent (ask for a new code).
+  bool lastVerificationSendFailed = false;
+
+  /// Emails a new confirmation code; returns the message to show.
+  Future<String> sendVerificationCode() async {
+    final j = await json('POST', '/api/v1/auth/verify-email/send');
+    if (j['alreadyVerified'] == true) await refreshAccount();
+    return j['message'] as String? ?? 'A new code was sent.';
+  }
+
+  /// Confirms the email with [code]: starts the free trial (and a referral code
+  /// given at sign-up).
+  Future<({bool trialStarted, Map<String, dynamic>? referral})> verifyEmail(String code) async {
+    final j = await json('POST', '/api/v1/auth/verify-email', body: {'code': code});
+    if (j['user'] is Map) {
+      final prefs = await SharedPreferences.getInstance();
+      final u = AccountUser.fromJson(j['user'] as Map<String, dynamic>);
+      await prefs.setString(_kUser, jsonEncode(u.toJson()));
+      user.value = u;
+    }
+    if (j['entitlement'] is Map) await setEntitlement(j['entitlement'] as Map<String, dynamic>);
+    return (
+      trialStarted: j['trialStarted'] == true,
+      referral: j['referral'] is Map ? j['referral'] as Map<String, dynamic> : null,
+    );
   }
 
   /// Changes the password (other devices are logged out; this one stays logged in).
