@@ -34,20 +34,35 @@ class SheetFile {
       {'name': name, 'source': source, 'size': size, 'modified': modified?.millisecondsSinceEpoch};
 }
 
-/// Finds, remembers and reads spreadsheets (Excel viewer).
-class SheetStore {
-  static const channel = MethodChannel('abhi_utility/sheets');
-  static const _kRecent = 'excel_recent';
-  static const extensions = ['xlsx', 'xlsm', 'xls', 'csv'];
+/// Spreadsheets (Excel viewer).
+const sheetStore = FileStore(
+  channel: MethodChannel('abhi_utility/sheets'),
+  recentKey: 'excel_recent',
+  extensions: ['xlsx', 'xlsm', 'xls', 'csv'],
+);
+
+/// Word / text documents (Docs).
+const docStore = FileStore(
+  channel: MethodChannel('abhi_utility/docs'),
+  recentKey: 'docs_recent',
+  extensions: ['docx', 'doc', 'txt'],
+);
+
+/// Finds, remembers, reads and saves one kind of file.
+class FileStore {
+  const FileStore({required this.channel, required this.recentKey, required this.extensions});
+  final MethodChannel channel;
+  final String recentKey;
+  final List<String> extensions;
 
   /// "All files access" granted: every spreadsheet on the phone can be listed.
-  static Future<bool> hasAllFilesAccess() async =>
+  Future<bool> hasAllFilesAccess() async =>
       await channel.invokeMethod<bool>('hasAllFilesAccess') ?? false;
 
-  static Future<void> requestAllFilesAccess() => channel.invokeMethod('requestAllFilesAccess');
+  Future<void> requestAllFilesAccess() => channel.invokeMethod('requestAllFilesAccess');
 
   /// Every spreadsheet on the phone, newest first (needs [hasAllFilesAccess]).
-  static Future<List<SheetFile>> scan() async {
+  Future<List<SheetFile>> scan() async {
     final raw = await channel.invokeListMethod<Map>('scan') ?? const [];
     return [
       for (final m in raw)
@@ -61,7 +76,7 @@ class SheetStore {
     ];
   }
 
-  static Future<Uint8List> read(SheetFile f) async {
+  Future<Uint8List> read(SheetFile f) async {
     if (!f.source.contains('://')) {
       final file = File(f.source);
       if (await file.exists()) return file.readAsBytes();
@@ -72,7 +87,7 @@ class SheetStore {
   }
 
   /// Lets the user choose a spreadsheet (null if cancelled).
-  static Future<SheetFile?> pick() async {
+  Future<SheetFile?> pick() async {
     final file = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: extensions);
     if (file == null) return null;
     return SheetFile(name: file.name, source: file.path ?? file.uri.toString());
@@ -80,13 +95,15 @@ class SheetStore {
 
   static String mimeOf(String name) => switch (name.split('.').last.toLowerCase()) {
         'csv' => 'text/csv',
+        'txt' => 'text/plain',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'xlsm' => 'application/vnd.ms-excel.sheet.macroenabled.12',
         _ => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       };
 
   /// Saves over the original when Android allows it; otherwise as a copy in
   /// Downloads/AbhiUtility. Returns the file to keep editing, and true if it is a new copy.
-  static Future<(SheetFile, bool)> save(SheetFile f, Uint8List bytes) async {
+  Future<(SheetFile, bool)> save(SheetFile f, Uint8List bytes) async {
     try {
       await channel.invokeMethod('write', {'source': f.source, 'bytes': bytes});
       return (f, false);
@@ -97,7 +114,7 @@ class SheetStore {
   }
 
   /// Writes [bytes] as [name] into Downloads/AbhiUtility and remembers it.
-  static Future<SheetFile> saveCopy(Uint8List bytes, String name) async {
+  Future<SheetFile> saveCopy(Uint8List bytes, String name) async {
     final uri = await channel.invokeMethod<String>('saveCopy', {'bytes': bytes, 'name': name, 'mime': mimeOf(name)});
     final copy = SheetFile(name: await nameOf(uri!), source: uri, size: bytes.length, modified: DateTime.now());
     await addRecent(copy);
@@ -105,15 +122,15 @@ class SheetStore {
   }
 
   /// File name of a content:// uri ("Open with").
-  static Future<String> nameOf(String uri) async =>
+  Future<String> nameOf(String uri) async =>
       await channel.invokeMethod<String>('displayName', {'uri': uri}) ?? 'Spreadsheet';
 
   // ---- Recently opened ----------------------------------------------------------------
 
-  static Future<List<SheetFile>> recents() async {
+  Future<List<SheetFile>> recents() async {
     final prefs = await SharedPreferences.getInstance();
     final list = <SheetFile>[];
-    for (final s in prefs.getStringList(_kRecent) ?? const <String>[]) {
+    for (final s in prefs.getStringList(recentKey) ?? const <String>[]) {
       try {
         final f = SheetFile.fromJson(jsonDecode(s) as Map<String, dynamic>);
         // Deleted files drop off the list (content uris can't be checked cheaply).
@@ -123,15 +140,15 @@ class SheetStore {
     return list;
   }
 
-  static Future<void> addRecent(SheetFile f) async {
+  Future<void> addRecent(SheetFile f) async {
     final prefs = await SharedPreferences.getInstance();
     final list = (await recents()).where((r) => r.source != f.source).toList()..insert(0, f);
-    await prefs.setStringList(_kRecent, list.take(15).map((r) => jsonEncode(r.toJson())).toList());
+    await prefs.setStringList(recentKey, list.take(15).map((r) => jsonEncode(r.toJson())).toList());
   }
 
-  static Future<void> removeRecent(SheetFile f) async {
+  Future<void> removeRecent(SheetFile f) async {
     final prefs = await SharedPreferences.getInstance();
     final list = (await recents()).where((r) => r.source != f.source).toList();
-    await prefs.setStringList(_kRecent, list.map((r) => jsonEncode(r.toJson())).toList());
+    await prefs.setStringList(recentKey, list.map((r) => jsonEncode(r.toJson())).toList());
   }
 }

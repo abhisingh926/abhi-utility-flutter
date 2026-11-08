@@ -145,6 +145,11 @@ class _AuthFormState extends State<_AuthForm> {
         if (ref != null && ref['applied'] != true) {
           // Account made, but the code couldn't be used (e.g. this email used one before).
           messenger.showSnackBar(SnackBar(content: Text('Referral code not used: ${ref['message'] ?? ''}')));
+        } else if (ref != null && ((ref['friendDays'] as num?) ?? 0) > 0) {
+          messenger.showSnackBar(SnackBar(
+            duration: const Duration(seconds: 5),
+            content: Text('🎁 Referral code applied: +${ref['friendDays']} bonus days of Pro added!'),
+          ));
         }
       } else {
         trialStarted = await ApiClient.instance.login(email: email, password: _password.text);
@@ -268,7 +273,7 @@ class _AuthFormState extends State<_AuthForm> {
                     textCapitalization: TextCapitalization.characters,
                     decoration: const InputDecoration(
                       labelText: 'Referral code (optional)',
-                      helperText: "Got a code from a friend? They'll get a free month",
+                      helperText: "Got a friend's code? You get 10 bonus days of Pro",
                       prefixIcon: Icon(Icons.card_giftcard),
                       border: OutlineInputBorder(),
                     ),

@@ -390,69 +390,11 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
-        // Excel viewer: list / read spreadsheets, "All files access", "Open with".
+        // Excel viewer and Docs: list / read / save files, "All files access", "Open with".
         sheetsChannel = MethodChannel(messenger, "abhi_utility/sheets")
-        sheetsChannel!!.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "hasAllFilesAccess" -> result.success(SheetFiles.hasAllFilesAccess(this))
-                "requestAllFilesAccess" -> {
-                    SheetFiles.requestAllFilesAccess(this)
-                    result.success(null)
-                }
-                "scan" -> Thread {
-                    try {
-                        val list = SheetFiles.scan(this)
-                        runOnUiThread { result.success(list) }
-                    } catch (e: Exception) {
-                        runOnUiThread { result.error("SCAN_FAILED", e.message, null) }
-                    }
-                }.start()
-                "read" -> {
-                    val source = call.argument<String>("source")!!
-                    Thread {
-                        try {
-                            val bytes = SheetFiles.read(this, source)
-                            runOnUiThread { result.success(bytes) }
-                        } catch (e: Exception) {
-                            runOnUiThread { result.error("READ_FAILED", e.message, null) }
-                        }
-                    }.start()
-                }
-                "write" -> {
-                    val source = call.argument<String>("source")!!
-                    val bytes = call.argument<ByteArray>("bytes")!!
-                    Thread {
-                        try {
-                            SheetFiles.write(this, source, bytes)
-                            runOnUiThread { result.success(true) }
-                        } catch (e: Exception) {
-                            runOnUiThread { result.error("WRITE_FAILED", e.message, null) }
-                        }
-                    }.start()
-                }
-                "saveCopy" -> {
-                    val bytes = call.argument<ByteArray>("bytes")!!
-                    val name = call.argument<String>("name")!!
-                    val mime = call.argument<String>("mime")!!
-                    Thread {
-                        try {
-                            val uri = SheetFiles.saveCopy(this, bytes, name, mime)
-                            runOnUiThread { result.success(uri) }
-                        } catch (e: Exception) {
-                            runOnUiThread { result.error("SAVE_FAILED", e.message, null) }
-                        }
-                    }.start()
-                }
-                "displayName" -> result.success(SheetFiles.displayName(this, call.argument<String>("uri")!!))
-                // Spreadsheet this app was opened with ("Open with → Abhi Utility"), if any.
-                "takeIncoming" -> {
-                    val uri = SheetFiles.incomingUri(this, intent)
-                    if (uri != null) intent?.data = null // only once
-                    result.success(uri)
-                }
-                else -> result.notImplemented()
-            }
-        }
+        sheetsChannel!!.setMethodCallHandler { call, result -> handleFiles(SheetFiles.Kind.SHEETS, call, result) }
+        docsChannel = MethodChannel(messenger, "abhi_utility/docs")
+        docsChannel!!.setMethodCallHandler { call, result -> handleFiles(SheetFiles.Kind.DOCS, call, result) }
 
         downloaderChannel = MethodChannel(messenger, "abhi_utility/downloader")
         downloaderChannel!!.setMethodCallHandler { call, result ->
@@ -639,11 +581,77 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun incomingPdfUri(i: Intent?): String? {
         if (i?.action != Intent.ACTION_VIEW) return null
-        if (SheetFiles.incomingUri(this, i) != null) return null // Excel/CSV: the Excel viewer
+        // Excel/CSV and Word files have their own viewers.
+        if (SheetFiles.incomingUri(this, i, SheetFiles.Kind.SHEETS) != null) return null
+        if (SheetFiles.incomingUri(this, i, SheetFiles.Kind.DOCS) != null) return null
         return i.data?.toString()
     }
 
+    /** Excel viewer ("sheets") and Docs ("docs") share these file operations. */
+    private fun handleFiles(kind: SheetFiles.Kind, call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "hasAllFilesAccess" -> result.success(SheetFiles.hasAllFilesAccess(this))
+            "requestAllFilesAccess" -> {
+                SheetFiles.requestAllFilesAccess(this)
+                result.success(null)
+            }
+            "scan" -> Thread {
+                try {
+                    val list = SheetFiles.scan(this, kind)
+                    runOnUiThread { result.success(list) }
+                } catch (e: Exception) {
+                    runOnUiThread { result.error("SCAN_FAILED", e.message, null) }
+                }
+            }.start()
+            "read" -> {
+                val source = call.argument<String>("source")!!
+                Thread {
+                    try {
+                        val bytes = SheetFiles.read(this, source)
+                        runOnUiThread { result.success(bytes) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("READ_FAILED", e.message, null) }
+                    }
+                }.start()
+            }
+            "write" -> {
+                val source = call.argument<String>("source")!!
+                val bytes = call.argument<ByteArray>("bytes")!!
+                Thread {
+                    try {
+                        SheetFiles.write(this, source, bytes)
+                        runOnUiThread { result.success(true) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("WRITE_FAILED", e.message, null) }
+                    }
+                }.start()
+            }
+            "saveCopy" -> {
+                val bytes = call.argument<ByteArray>("bytes")!!
+                val name = call.argument<String>("name")!!
+                val mime = call.argument<String>("mime")!!
+                Thread {
+                    try {
+                        val uri = SheetFiles.saveCopy(this, bytes, name, mime)
+                        runOnUiThread { result.success(uri) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("SAVE_FAILED", e.message, null) }
+                    }
+                }.start()
+            }
+            "displayName" -> result.success(SheetFiles.displayName(this, call.argument<String>("uri")!!))
+            // File of this kind the app was opened with ("Open with → Abhi Utility"), if any.
+            "takeIncoming" -> {
+                val uri = SheetFiles.incomingUri(this, intent, kind)
+                if (uri != null) intent?.data = null // only once
+                result.success(uri)
+            }
+            else -> result.notImplemented()
+        }
+    }
+
     private var sheetsChannel: MethodChannel? = null
+    private var docsChannel: MethodChannel? = null
 
     private var downloaderChannel: MethodChannel? = null
     private var pendingStatusPick: MethodChannel.Result? = null
@@ -706,7 +714,8 @@ class MainActivity : FlutterFragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         incomingPdfUri(intent)?.let { pdfChannel?.invokeMethod("incomingPdf", it) }
-        SheetFiles.incomingUri(this, intent)?.let { sheetsChannel?.invokeMethod("incomingSheet", it) }
+        SheetFiles.incomingUri(this, intent, SheetFiles.Kind.SHEETS)?.let { sheetsChannel?.invokeMethod("incomingSheet", it) }
+        SheetFiles.incomingUri(this, intent, SheetFiles.Kind.DOCS)?.let { docsChannel?.invokeMethod("incomingDoc", it) }
         downloaderLaunch(intent)?.let { downloaderChannel?.invokeMethod("launch", it) }
     }
 

@@ -69,6 +69,14 @@
                 <data android:mimeType="text/csv"/>
                 <data android:mimeType="text/comma-separated-values"/>
             </intent-filter>
+            <!-- "Open with → Abhi Utility" for Word documents (Docs). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="content"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>
+                <data android:mimeType="application/msword"/>
+            </intent-filter>
         </activity>
         <!-- System fingerprint prompt for App Lock extra time (opened by ReelCounterService). -->
         <activity

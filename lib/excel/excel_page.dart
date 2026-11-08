@@ -1,19 +1,83 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../docs/doc_viewer.dart';
+import '../docs/doc_writer.dart';
 import 'sheet_store.dart';
 import 'sheet_viewer.dart';
 import 'sheet_writer.dart';
 
-/// Excel viewer tab: open a file, recently opened files, and every Excel / CSV
-/// file on the phone (after "All files access" is allowed).
-class ExcelPage extends StatefulWidget {
-  const ExcelPage({super.key});
+/// What a file tab (Excel viewer, Docs) shows and does.
+class FileTabKind {
+  const FileTabKind({
+    required this.store,
+    required this.newLabel,
+    required this.newExtension,
+    required this.newDefaultName,
+    required this.newFile,
+    required this.open,
+    required this.hint,
+    required this.typeName,
+    required this.badge,
+  });
 
-  @override
-  State<ExcelPage> createState() => ExcelPageState();
+  final FileStore store;
+  final String newLabel; // "New spreadsheet"
+  final String newExtension; // "xlsx"
+  final String newDefaultName; // "Spreadsheet"
+  final Uint8List Function() newFile;
+  final Future<void> Function(BuildContext context, SheetFile file, {bool remember, bool edit}) open;
+  final String hint;
+  final String typeName; // "Excel" → "All Excel files on this phone"
+  final (Color, String) Function(String extension) badge;
 }
 
-class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
+final excelKind = FileTabKind(
+  store: sheetStore,
+  newLabel: 'New spreadsheet',
+  newExtension: 'xlsx',
+  newDefaultName: 'Spreadsheet',
+  newFile: newWorkbook,
+  open: SheetViewer.open,
+  hint: 'View and edit Excel (.xlsx, .xlsm) and CSV files. "Open with → Abhi Utility" works too.',
+  typeName: 'Excel',
+  badge: (ext) => switch (ext) {
+    'csv' => (Colors.blue, 'CSV'),
+    'xls' => (Colors.blueGrey, 'XLS'),
+    _ => (Colors.green.shade700, 'XLSX'),
+  },
+);
+
+final docsKind = FileTabKind(
+  store: docStore,
+  newLabel: 'New document',
+  newExtension: 'docx',
+  newDefaultName: 'Document',
+  newFile: newDocument,
+  open: DocViewer.open,
+  hint: 'View and edit Word documents (.docx) and text files. "Open with → Abhi Utility" works too.',
+  typeName: 'Word',
+  badge: (ext) => switch (ext) {
+    'txt' => (Colors.grey.shade700, 'TXT'),
+    'doc' => (Colors.blueGrey, 'DOC'),
+    _ => (const Color(0xFF2B579A), 'DOCX'),
+  },
+);
+
+/// A file tab: open a file, create one, recently opened files, and every file of
+/// this kind on the phone (after "All files access" is allowed).
+class FileTabPage extends StatefulWidget {
+  const FileTabPage({super.key, required this.kind});
+  final FileTabKind kind;
+
+  @override
+  State<FileTabPage> createState() => FileTabPageState();
+}
+
+class FileTabPageState extends State<FileTabPage> with WidgetsBindingObserver {
+  FileTabKind get _k => widget.kind;
+  FileStore get _store => widget.kind.store;
+
   List<SheetFile> _recent = const [];
   List<SheetFile>? _all; // null = not loaded yet
   bool _access = false;
@@ -40,8 +104,8 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
   }
 
   Future<void> refresh() async {
-    final recent = await SheetStore.recents();
-    final access = await SheetStore.hasAllFilesAccess();
+    final recent = await _store.recents();
+    final access = await _store.hasAllFilesAccess();
     if (!mounted) return;
     setState(() {
       _recent = recent;
@@ -54,7 +118,7 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
     if (_scanning) return;
     setState(() => _scanning = true);
     try {
-      final all = await SheetStore.scan();
+      final all = await _store.scan();
       if (mounted) setState(() => _all = all);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not list files: $e')));
@@ -64,7 +128,7 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pick() async {
-    final f = await SheetStore.pick();
+    final f = await _store.pick();
     if (f != null && mounted) await _open(f);
   }
 
@@ -72,15 +136,15 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
   Future<void> _createNew() async {
     final now = DateTime.now();
     final ctl = TextEditingController(
-        text: 'Spreadsheet ${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${now.year}');
+        text: '${_k.newDefaultName} ${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${now.year}');
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('New spreadsheet'),
+        title: Text(_k.newLabel),
         content: TextField(
           controller: ctl,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'File name', suffixText: '.xlsx'),
+          decoration: InputDecoration(labelText: 'File name', suffixText: '.${_k.newExtension}'),
           onSubmitted: (v) => Navigator.pop(context, v),
         ),
         actions: [
@@ -92,9 +156,10 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
     final clean = name?.trim().replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
     if (clean == null || clean.isEmpty || !mounted) return;
     try {
-      final file = await SheetStore.saveCopy(newWorkbook(), clean.toLowerCase().endsWith('.xlsx') ? clean : '$clean.xlsx');
+      final ext = '.${_k.newExtension}';
+      final file = await _store.saveCopy(_k.newFile(), clean.toLowerCase().endsWith(ext) ? clean : '$clean$ext');
       if (!mounted) return;
-      await SheetViewer.open(context, file, edit: true);
+      await _k.open(context, file, edit: true);
       refresh();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the file: $e')));
@@ -102,16 +167,16 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
   }
 
   Future<void> _open(SheetFile f) async {
-    await SheetViewer.open(context, f);
-    final recent = await SheetStore.recents();
+    await _k.open(context, f);
+    final recent = await _store.recents();
     if (mounted) setState(() => _recent = recent);
   }
 
   /// Opened with "Open with → Abhi Utility" (content uri, not remembered: the access is temporary).
   Future<void> openIncoming(String uri) async {
-    final name = await SheetStore.nameOf(uri);
+    final name = await _store.nameOf(uri);
     if (!mounted) return;
-    await SheetViewer.open(context, SheetFile(name: name, source: uri), remember: false);
+    await _k.open(context, SheetFile(name: name, source: uri), remember: false);
   }
 
   bool _matches(SheetFile f) => _query.isEmpty || f.name.toLowerCase().contains(_query.toLowerCase());
@@ -144,13 +209,13 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
                   onPressed: _createNew,
                   style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
                   icon: const Icon(Icons.add),
-                  label: const Text('New spreadsheet'),
+                  label: Text(_k.newLabel),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 6),
-          Text('View and edit Excel (.xlsx, .xlsm) and CSV files. "Open with → Abhi Utility" works too.',
+          Text(_k.hint,
               textAlign: TextAlign.center, style: t.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
           const SizedBox(height: 12),
           if (_recent.isNotEmpty || (_all?.isNotEmpty ?? false))
@@ -169,15 +234,16 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
             for (final f in recent.take(_query.isEmpty ? 5 : 15))
               _FileTile(
                 file: f,
+                badge: _k.badge(f.extension),
                 onTap: () => _open(f),
                 onRemove: () async {
-                  await SheetStore.removeRecent(f);
+                  await _store.removeRecent(f);
                   refresh();
                 },
               ),
           ],
 
-          _heading(context, all == null ? 'All Excel files on this phone' : 'All Excel files on this phone (${all.length})',
+          _heading(context, 'All ${_k.typeName} files on this phone${all == null ? '' : ' (${all.length})'}',
               trailing: _access
                   ? IconButton(
                       tooltip: 'Refresh',
@@ -197,17 +263,17 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
                     Row(children: [
                       Icon(Icons.find_in_page_outlined, color: scheme.primary),
                       const SizedBox(width: 8),
-                      Expanded(child: Text('Find every Excel file', style: t.titleMedium)),
+                      Expanded(child: Text('Find every ${_k.typeName} file', style: t.titleMedium)),
                     ]),
                     const SizedBox(height: 8),
-                    const Text(
-                      'To list all Excel and CSV files on your phone (Downloads, WhatsApp, Documents…), '
+                    Text(
+                      'To list all ${_k.typeName} files on your phone (Downloads, WhatsApp, Documents…), '
                       'Android needs you to allow "All files access" for Abhi Utility. '
                       'Files are only read on this phone, never uploaded.',
                     ),
                     const SizedBox(height: 12),
                     FilledButton.tonalIcon(
-                      onPressed: SheetStore.requestAllFilesAccess,
+                      onPressed: _store.requestAllFilesAccess,
                       icon: const Icon(Icons.lock_open),
                       label: const Text('Allow access'),
                     ),
@@ -220,11 +286,11 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
           else if (all.isEmpty)
             Padding(
               padding: const EdgeInsets.all(24),
-              child: Text(_query.isEmpty ? 'No Excel or CSV files found on this phone.' : 'No files match "$_query".',
+              child: Text(_query.isEmpty ? 'No ${_k.typeName} files found on this phone.' : 'No files match "$_query".',
                   textAlign: TextAlign.center),
             )
           else
-            for (final f in all) _FileTile(file: f, onTap: () => _open(f)),
+            for (final f in all) _FileTile(file: f, badge: _k.badge(f.extension), onTap: () => _open(f)),
         ],
       ),
     );
@@ -242,8 +308,9 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
 }
 
 class _FileTile extends StatelessWidget {
-  const _FileTile({required this.file, required this.onTap, this.onRemove});
+  const _FileTile({required this.file, required this.badge, required this.onTap, this.onRemove});
   final SheetFile file;
+  final (Color, String) badge;
   final VoidCallback onTap;
   final VoidCallback? onRemove;
 
@@ -260,11 +327,7 @@ class _FileTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (color, label) = switch (file.extension) {
-      'csv' => (Colors.blue, 'CSV'),
-      'xls' => (Colors.blueGrey, 'XLS'),
-      _ => (Colors.green.shade700, 'XLSX'),
-    };
+    final (color, label) = badge;
     final details = [
       ?file.folder,
       if (file.size != null) _size(file.size!),

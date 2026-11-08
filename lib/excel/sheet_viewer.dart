@@ -18,7 +18,7 @@ class SheetViewer extends StatefulWidget {
   final bool startEditing;
 
   static Future<void> open(BuildContext context, SheetFile file, {bool remember = true, bool edit = false}) {
-    if (remember) SheetStore.addRecent(file);
+    if (remember) sheetStore.addRecent(file);
     return Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => SheetViewer(file: file, startEditing: edit)));
   }
@@ -48,7 +48,7 @@ class _SheetViewerState extends State<SheetViewer> {
   bool _addedSheet = false;
 
   Future<Workbook> _load() async {
-    final bytes = await SheetStore.read(_file);
+    final bytes = await sheetStore.read(_file);
     _bytes = bytes;
     return readWorkbook(bytes, _file.name);
   }
@@ -203,7 +203,7 @@ class _SheetViewerState extends State<SheetViewer> {
       final bytes = book.isCsv
           ? saveCsv(book.sheets.first, book.csvSeparator!)
           : await Isolate.run(() => saveXlsx(original, book, edits));
-      final (file, copied) = await SheetStore.save(_file, bytes);
+      final (file, copied) = await sheetStore.save(_file, bytes);
       final reloaded = await readWorkbook(bytes, file.name);
       if (!mounted) return true;
       setState(() {

@@ -80,6 +80,7 @@ class _HomeShellState extends State<HomeShell> {
   static const _zipTab = 11;
   static const _excelTab = 12;
   static const _sosTab = 13;
+  static const _docsTab = 14;
 
   /// Every feature: drives both the Home page cards and the bottom bar.
   static const _features = [
@@ -109,6 +110,8 @@ class _HomeShellState extends State<HomeShell> {
         subtitle: 'View & edit Excel and CSV files', color: Color(0xFF1D6F42)),
     HomeFeature(tab: _sosTab, icon: Icons.sos, title: 'SOS',
         subtitle: 'Draw S on the lock screen to call for help', color: Colors.red),
+    HomeFeature(tab: _docsTab, icon: Icons.description_outlined, title: 'Docs',
+        subtitle: 'View & edit Word documents', color: Color(0xFF2B579A)),
   ];
 
   final _homeKey = GlobalKey<HomePageState>();
@@ -118,7 +121,8 @@ class _HomeShellState extends State<HomeShell> {
   final _downloaderKey = GlobalKey<DownloaderPageState>();
   final _apkKey = GlobalKey<ApkExtractorPageState>();
   final _zipKey = GlobalKey<ZipPageState>();
-  final _excelKey = GlobalKey<ExcelPageState>();
+  final _excelKey = GlobalKey<FileTabPageState>();
+  final _docsKey = GlobalKey<FileTabPageState>();
   final _sosKey = GlobalKey<SosPageState>();
   int _tab = _homeTab;
 
@@ -173,23 +177,35 @@ class _HomeShellState extends State<HomeShell> {
     });
 
     // "Open with → Abhi Utility" for Excel / CSV files: while running…
-    SheetStore.channel.setMethodCallHandler((call) async {
+    sheetStore.channel.setMethodCallHandler((call) async {
       if (call.method == 'incomingSheet') await _openIncomingSheet(call.arguments as String);
     });
     // …and when the app was started by it.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final uri = await SheetStore.channel.invokeMethod<String>('takeIncoming');
+      final uri = await sheetStore.channel.invokeMethod<String>('takeIncoming');
       if (uri != null) await _openIncomingSheet(uri);
+    });
+
+    // "Open with → Abhi Utility" for Word documents: while running…
+    docStore.channel.setMethodCallHandler((call) async {
+      if (call.method == 'incomingDoc') await _openIncomingFile(_docsTab, _docsKey, call.arguments as String);
+    });
+    // …and when the app was started by it.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final uri = await docStore.channel.invokeMethod<String>('takeIncoming');
+      if (uri != null) await _openIncomingFile(_docsTab, _docsKey, uri);
     });
   }
 
-  Future<void> _openIncomingSheet(String uri) async {
+  Future<void> _openIncomingSheet(String uri) => _openIncomingFile(_excelTab, _excelKey, uri);
+
+  Future<void> _openIncomingFile(int tab, GlobalKey<FileTabPageState> key, String uri) async {
     if (!mounted) return;
-    _select(_excelTab);
-    // No trial / subscription: the Excel tab shows the paywall instead of the file.
+    _select(tab);
+    // No trial / subscription: the tab shows the paywall instead of the file.
     if (!ApiClient.instance.hasAccess) return;
     await Future<void>.delayed(const Duration(milliseconds: 100)); // let the tab build
-    await _excelKey.currentState?.openIncoming(uri);
+    await key.currentState?.openIncoming(uri);
   }
 
   Future<void> _openDownloader(Map launch) async {
@@ -327,8 +343,9 @@ class _HomeShellState extends State<HomeShell> {
                 TasksPage(key: ValueKey('tasks$_dataVersion')),
                 ApkExtractorPage(key: _apkKey),
                 ZipPage(key: _zipKey),
-                ExcelPage(key: _excelKey),
+                FileTabPage(key: _excelKey, kind: excelKind),
                 SosPage(key: _sosKey),
+                FileTabPage(key: _docsKey, kind: docsKind),
               ],
             ),
             if (_tab != _homeTab)

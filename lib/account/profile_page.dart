@@ -238,7 +238,8 @@ class _ProfilePageState extends State<ProfilePage> {
       if (j['entitlement'] is Map) await _api.setEntitlement(j['entitlement'] as Map<String, dynamic>);
       if (!mounted) return;
       setState(() => _referral = j['referral'] as Map<String, dynamic>?);
-      _snack('🎉 Code applied. Thanks for joining through a friend!');
+      final bonus = (j['friendDays'] as num?)?.toInt() ?? 0;
+      _snack(bonus > 0 ? '🎁 Code applied: +$bonus bonus days of Pro added!' : '🎉 Code applied. Thanks for joining through a friend!');
     } on ApiException catch (e) {
       _snack(e.message);
     }
@@ -529,7 +530,8 @@ class _ProfilePageState extends State<ProfilePage> {
         ListTile(
           leading: const Icon(Icons.redeem),
           title: const Text("Have a friend's code?"),
-          subtitle: Text('Enter it within ${r['applyWithinDays']} days of registering'),
+          subtitle: Text('${((r['friendDays'] as num?) ?? 0) > 0 ? 'Get ${r['friendDays']} bonus days · ' : ''}'
+              'enter it within ${r['applyWithinDays']} days of registering'),
           trailing: const Icon(Icons.chevron_right),
           onTap: _applyCode,
         ),

@@ -21,20 +21,38 @@ import java.io.File
  * "Open with → Abhi Utility".
  */
 object SheetFiles {
-    private val EXTENSIONS = listOf("xlsx", "xlsm", "xls", "csv")
+    /** Spreadsheets (Excel viewer) or documents (Docs). */
+    enum class Kind(
+        /** Listed by [scan] and recognised by name. */
+        val extensions: List<String>,
+        val mimeTypes: Set<String>,
+        /** Recognised when opened with the app, but not listed (there are too many). */
+        val openOnly: List<String> = emptyList(),
+    ) {
+        SHEETS(
+            listOf("xlsx", "xlsm", "xls", "csv"),
+            setOf(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel.sheet.macroenabled.12",
+                "application/vnd.ms-excel",
+                "text/csv",
+                "text/comma-separated-values",
+            ),
+        ),
+        DOCS(
+            listOf("docx", "doc"),
+            setOf(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/msword",
+            ),
+            openOnly = listOf("txt"),
+        );
 
-    private val MIME_TYPES = setOf(
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel.sheet.macroenabled.12",
-        "application/vnd.ms-excel",
-        "text/csv",
-        "text/comma-separated-values",
-    )
-
-    /** Is this (content type, file name) a spreadsheet the viewer handles? */
-    fun isSheet(mime: String?, name: String?): Boolean =
-        mime?.lowercase() in MIME_TYPES ||
-            EXTENSIONS.any { name?.lowercase()?.endsWith(".$it") == true }
+        /** Is this (content type, file name) a file of this kind? */
+        fun matches(mime: String?, name: String?): Boolean =
+            mime?.lowercase() in mimeTypes ||
+                (extensions + openOnly).any { name?.lowercase()?.endsWith(".$it") == true }
+    }
 
     /** May we list every spreadsheet on the phone? */
     fun hasAllFilesAccess(context: Context): Boolean =
@@ -57,8 +75,9 @@ object SheetFiles {
         }
     }
 
-    /** Every spreadsheet MediaStore knows about, newest first. */
-    fun scan(context: Context): List<Map<String, Any?>> {
+    /** Every file of [kind] MediaStore knows about, newest first. */
+    fun scan(context: Context, kind: Kind): List<Map<String, Any?>> {
+        val extensions = kind.extensions
         val collection = MediaStore.Files.getContentUri("external")
         @Suppress("DEPRECATION") // DATA (the path) is still filled in and lets Dart read the file directly
         val projection = arrayOf(
@@ -68,8 +87,8 @@ object SheetFiles {
             MediaStore.Files.FileColumns.DATE_MODIFIED,
             MediaStore.Files.FileColumns.DATA,
         )
-        val selection = EXTENSIONS.joinToString(" OR ") { "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" }
-        val args = EXTENSIONS.map { "%.$it" }.toTypedArray()
+        val selection = extensions.joinToString(" OR ") { "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" }
+        val args = extensions.map { "%.$it" }.toTypedArray()
         val out = mutableListOf<Map<String, Any?>>()
         context.contentResolver.query(
             collection, projection, selection, args,
@@ -155,12 +174,12 @@ object SheetFiles {
         null
     }
 
-    /** Spreadsheet uri this app was opened with, or null. */
-    fun incomingUri(context: Context, i: Intent?): String? {
+    /** File of [kind] this app was opened with ("Open with"), or null. */
+    fun incomingUri(context: Context, i: Intent?, kind: Kind): String? {
         if (i?.action != Intent.ACTION_VIEW) return null
         val uri = i.data ?: return null
         val mime = i.type ?: try { context.contentResolver.getType(uri) } catch (_: Exception) { null }
         val name = displayName(context, uri.toString()) ?: uri.lastPathSegment
-        return if (isSheet(mime, name)) uri.toString() else null
+        return if (kind.matches(mime, name)) uri.toString() else null
     }
 }
