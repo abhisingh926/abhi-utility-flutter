@@ -30,6 +30,7 @@ class MainActivity : FlutterFragmentActivity() {
         cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         cameraId = findFlashCamera(cameraManager)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
+        BackupCrypto.register(messenger) // encrypted diary backups
 
         MethodChannel(messenger, "abhi_utility/control").setMethodCallHandler { call, result ->
             when (call.method) {

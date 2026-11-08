@@ -7,6 +7,7 @@ import 'account/api_client.dart';
 import 'account/profile_page.dart';
 import 'account/subscription_page.dart';
 import 'account/subscription_service.dart';
+import 'account/user_avatar.dart';
 import 'apk/apk_extractor_page.dart';
 import 'applock/app_lock_page.dart';
 import 'flashlight_page.dart';
@@ -321,7 +322,8 @@ class _HomeShellState extends State<HomeShell> {
               valueListenable: ApiClient.instance.user,
               builder: (context, user, _) => IconButton(
                 tooltip: user == null ? 'Login / Register' : 'Profile',
-                icon: Icon(user == null ? Icons.account_circle_outlined : Icons.account_circle),
+                // Logged in: their profile photo (or initial).
+                icon: user == null ? const Icon(Icons.account_circle_outlined) : const UserAvatar(radius: 14),
                 onPressed: _openAccount,
               ),
             ),

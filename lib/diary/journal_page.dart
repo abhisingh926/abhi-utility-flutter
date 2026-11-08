@@ -29,8 +29,9 @@ class _JournalPageState extends State<JournalPage> {
   String _query = '';
   bool _searching = false;
 
-  /// Diary password lock. Unlocked state is shared with App Lock (DiaryLock.unlocked);
-  /// leaving the app locks both (DiaryLock.onAppPaused, from the home shell).
+  /// Diary password lock (DiaryLock.unlocked). The App Lock password opens the
+  /// Diary too, but the Diary password never opens App Lock. Leaving the app
+  /// locks both (DiaryLock.onAppPaused, from the home shell).
   bool _lockEnabled = false;
   bool get _unlocked => DiaryLock.unlocked.value;
 
@@ -55,7 +56,7 @@ class _JournalPageState extends State<JournalPage> {
 
   Future<void> _unlockWithFingerprint() async {
     _bioPrompted = true;
-    if (await DiaryLock.authenticate()) DiaryLock.unlockAll();
+    if (await DiaryLock.authenticate()) DiaryLock.unlockDiary();
   }
 
   /// Offer fingerprint unlock (needs one successful scan to switch on).
@@ -100,7 +101,7 @@ class _JournalPageState extends State<JournalPage> {
         );
         if (ok) {
           setState(() => _lockEnabled = true);
-          DiaryLock.unlockAll();
+          DiaryLock.unlockDiary();
           _snack('🔒 Diary locked with a password');
           await _askEnableFingerprint();
         }
@@ -200,8 +201,7 @@ class _JournalPageState extends State<JournalPage> {
                   ? 'Use your fingerprint, the diary or the App Lock password'
                   : 'Enter the diary or the App Lock password',
               onSubmit: (pin) async {
-                if (!await DiaryLock.checkAnyPassword(pin)) return 'Wrong password';
-                DiaryLock.unlockAll(); // opens App Lock too
+                if (!await DiaryLock.unlockDiaryWith(pin)) return 'Wrong password';
                 return null;
               },
             ),

@@ -4,6 +4,7 @@ import 'api_client.dart';
 import 'backup_service.dart';
 import 'subscription_page.dart';
 import 'subscription_service.dart';
+import 'user_avatar.dart';
 
 /// Account: login / register when logged out, cloud backup when logged in.
 /// Pops with `true` if a backup was restored (so the diary/tasks reload).
@@ -538,9 +539,40 @@ class _BackupViewState extends State<_BackupView> {
     );
     if (yes != true) return;
     await _work((p) async {
-      await BackupService.restore(b.id, progress: p);
+      await BackupService.restore(b.id, progress: p, askPassword: _askBackupPassword);
       widget.onRestored();
     }, '✅ Diary and tasks restored');
+  }
+
+  /// Encrypted backup from another phone / older diary password: ask for it.
+  Future<String?> _askBackupPassword() async {
+    if (!mounted) return null;
+    final c = TextEditingController();
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.lock_outline, size: 40),
+        title: const Text('Encrypted backup'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Enter the diary password that was set when this backup was made.'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: c,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Diary password', border: OutlineInputBorder()),
+            onSubmitted: (v) => Navigator.pop(context, v),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, c.text), child: const Text('Unlock')),
+        ],
+      ),
+    );
+    // Not disposed here: the dialog's closing animation may still use it.
+    return pin;
   }
 
   Future<void> _delete(BackupInfo b) async {
@@ -594,9 +626,7 @@ class _BackupViewState extends State<_BackupView> {
         children: [
           Card(
             child: ListTile(
-              leading: CircleAvatar(
-                child: Text((u.name?.isNotEmpty == true ? u.name! : u.email)[0].toUpperCase()),
-              ),
+              leading: const UserAvatar(),
               title: Text(u.name?.isNotEmpty == true ? u.name! : u.email),
               subtitle: u.name?.isNotEmpty == true ? Text(u.email) : null,
               trailing: TextButton.icon(

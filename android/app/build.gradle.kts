@@ -1,8 +1,21 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Release signing key: android/key.properties (never committed, see android/.gitignore):
+//   storeFile=/absolute/path/to/upload-keystore.jks
+//   storePassword=...
+//   keyAlias=upload
+//   keyPassword=...
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val hasReleaseKey = keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.abhi.abhi_utility"
@@ -41,11 +54,22 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Never ship debug-signed builds: without key.properties the release
+            // build stops with an error (see the check at the end of this file).
+            signingConfig = if (hasReleaseKey) signingConfigs.getByName("release") else null
             isMinifyEnabled = false
             isShrinkResources = false
         }
@@ -65,4 +89,15 @@ flutter {
 dependencies {
     // Zip tool: password-protected (AES-256) zips.
     implementation("net.lingala.zip4j:zip4j:2.11.5")
+}
+
+// Fail release builds clearly instead of producing an unsigned / debug-signed app.
+gradle.taskGraph.whenReady {
+    val buildsRelease = allTasks.any { it.project == project && it.name.contains("Release") &&
+        (it.name.startsWith("assemble") || it.name.startsWith("bundle") || it.name.startsWith("package")) }
+    if (buildsRelease && !hasReleaseKey) {
+        throw GradleException(
+            "Release signing key missing: create android/key.properties (see the top of android/app/build.gradle.kts)."
+        )
+    }
 }

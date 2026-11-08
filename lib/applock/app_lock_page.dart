@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../diary/diary_lock.dart';
 import 'pin_pad.dart';
+import 'accessibility_disclosure.dart';
 
 /// App Lock: pick apps and a rule (always locked / daily limit / hourly limit).
 /// Enforcement happens natively in ReelCounterService.kt (Accessibility Service).
@@ -95,8 +96,9 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   bool _bioAvailable = false;
   bool _bioPrompted = false; // ask for the fingerprint once per lock, only while the tab is shown
 
-  /// Shared with the Diary: unlocking either opens both; leaving the app locks both.
-  bool get _unlocked => DiaryLock.unlocked.value;
+  /// Only the App Lock password/fingerprint opens this (and the Diary with it);
+  /// the Diary password does not. Leaving the app locks both.
+  bool get _unlocked => DiaryLock.appLockUnlocked.value;
   List<LockRule> _rules = [];
 
   /// Uninstall protection: {on, admin, guard, hasPassword} from the native side.
@@ -107,14 +109,14 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    DiaryLock.unlocked.addListener(_onLockChanged);
+    DiaryLock.appLockUnlocked.addListener(_onLockChanged);
     refresh();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    DiaryLock.unlocked.removeListener(_onLockChanged);
+    DiaryLock.appLockUnlocked.removeListener(_onLockChanged);
     super.dispose();
   }
 
@@ -295,7 +297,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
         title: const Text('Protect Abhi Utility from being uninstalled'),
         content: const Text(
           "Children won't be able to uninstall Abhi Utility, force-stop it, or turn off its "
-          'accessibility service. Those screens will ask for the App Lock or Diary password '
+          'accessibility service. Those screens will ask for the App Lock password '
           '(or your fingerprint).\n\n'
           'On the next screen Android asks to activate a "device admin app": tap Activate.\n\n'
           'To uninstall later, turn this switch off first.',
@@ -335,7 +337,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
             secondary: CircleAvatar(child: Icon(on ? Icons.shield : Icons.shield_outlined)),
             title: const Text('Uninstall protection'),
             subtitle: Text(on
-                ? "Children can't uninstall Abhi Utility. It needs the App Lock or Diary password, or your fingerprint."
+                ? "Children can't uninstall Abhi Utility. It needs the App Lock password or your fingerprint."
                 : 'Stop children from uninstalling Abhi Utility without the password'),
             value: on,
             onChanged: _setProtection,
@@ -352,7 +354,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
               leading: Icon(Icons.warning_amber, color: scheme.error),
               title: const Text('Settings are not protected'),
               subtitle: const Text('Turn on "Abhi Utility reel counter" in Accessibility settings'),
-              onTap: () => _reels.invokeMethod('openSettings'),
+              onTap: () => openAccessibilityWithConsent(context),
             ),
         ],
       ),
@@ -398,10 +400,10 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
             child: PinPad(
               title: 'App Lock is password protected',
               subtitle: _useFingerprint
-                  ? 'Use your fingerprint, the App Lock or the Diary password'
-                  : 'Enter the App Lock or the Diary password',
+                  ? 'Use your fingerprint or the App Lock password'
+                  : 'Enter the App Lock password',
               onSubmit: (pin) async {
-                if (!await DiaryLock.checkAnyPassword(pin)) return 'Wrong password';
+                if (!await DiaryLock.checkAppLockPassword(pin)) return 'Wrong password';
                 DiaryLock.unlockAll(); // opens the Diary too
                 return null;
               },
@@ -467,7 +469,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
                       ),
                       const SizedBox(height: 12),
                       FilledButton.icon(
-                        onPressed: () => _reels.invokeMethod('openSettings'),
+                        onPressed: () => openAccessibilityWithConsent(context),
                         icon: const Icon(Icons.settings_accessibility),
                         label: const Text('Open Accessibility settings'),
                       ),

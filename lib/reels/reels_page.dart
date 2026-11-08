@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../applock/app_lock_page.dart' show AppPicker, InstalledApp;
+import '../applock/accessibility_disclosure.dart';
 
 /// Daily reel report. Counting happens natively in ReelCounterService.kt
 /// (an Accessibility Service); this page reads the stored counts.
@@ -252,7 +253,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: () => _channel.invokeMethod('openSettings'),
+              onPressed: () => openAccessibilityWithConsent(context),
               icon: const Icon(Icons.settings_accessibility),
               label: const Text('Open Accessibility settings'),
             ),

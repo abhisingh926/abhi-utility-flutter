@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'account_page.dart';
 import 'api_client.dart';
 import 'subscription_page.dart';
+import 'user_avatar.dart';
 
 /// Profile: your details, your subscription (and its history), the referral
 /// program, and account actions (change password, log out, delete).
@@ -31,6 +33,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Map<String, dynamic>? _referral;
   bool _offline = false;
   String? _error;
+  bool _photoBusy = false;
 
   @override
   void initState() {
@@ -115,6 +118,81 @@ class _ProfilePageState extends State<ProfilePage> {
       };
 
   // ---- Actions -------------------------------------------------------------------------
+
+  /// Gallery / camera / remove, then upload a square 512 px JPEG.
+  Future<void> _changePhoto() async {
+    final hasPhoto = _api.user.value?.avatarVersion != null;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from gallery'),
+              onTap: () => Navigator.pop(context, 'gallery'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.pop(context, 'camera'),
+            ),
+            if (hasPhoto)
+              ListTile(
+                leading: Icon(Icons.delete_outline, color: Theme.of(context).colorScheme.error),
+                title: Text('Remove photo', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                onTap: () => Navigator.pop(context, 'remove'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    if (choice == 'remove') {
+      setState(() => _photoBusy = true);
+      try {
+        await _api.removeAvatar();
+        _snack('Photo removed');
+      } on ApiException catch (e) {
+        _snack(e.message);
+      } finally {
+        if (mounted) setState(() => _photoBusy = false);
+      }
+      return;
+    }
+
+    final XFile? file;
+    try {
+      file = await ImagePicker().pickImage(
+        source: choice == 'camera' ? ImageSource.camera : ImageSource.gallery,
+        preferredCameraDevice: CameraDevice.front,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 90,
+      );
+    } on PlatformException catch (e) {
+      _snack('Could not open the ${choice == 'camera' ? 'camera' : 'gallery'}: ${e.message}');
+      return;
+    }
+    if (file == null || !mounted) return;
+    setState(() => _photoBusy = true);
+    try {
+      final jpeg = await squareAvatarJpeg(await file.readAsBytes());
+      final version = await _api.uploadAvatar(jpeg);
+      final id = _api.user.value?.id;
+      if (version != null && id != null) await AvatarCache.remember(id, version, jpeg); // no re-download
+      _snack('Photo updated');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } on FormatException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
+    }
+  }
 
   Future<void> _editName() async {
     final c = TextEditingController(text: _api.user.value?.name ?? '');
@@ -293,11 +371,30 @@ class _ProfilePageState extends State<ProfilePage> {
     return Column(
       children: [
         const SizedBox(height: 8),
-        CircleAvatar(
-          radius: 40,
-          backgroundColor: scheme.primaryContainer,
-          child: Text(name[0].toUpperCase(),
-              style: TextStyle(fontSize: 34, color: scheme.onPrimaryContainer, fontWeight: FontWeight.bold)),
+        Semantics(
+          button: true,
+          label: 'Change profile photo',
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: _photoBusy ? null : _changePhoto,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                const UserAvatar(radius: 44),
+                if (_photoBusy)
+                  const SizedBox(width: 88, height: 88, child: CircularProgressIndicator(strokeWidth: 3)),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: CircleAvatar(
+                    radius: 15,
+                    backgroundColor: scheme.primary,
+                    child: Icon(Icons.photo_camera, size: 16, color: scheme.onPrimary),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
         const SizedBox(height: 10),
         Text(name, style: Theme.of(context).textTheme.titleLarge),

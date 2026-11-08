@@ -5,15 +5,15 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import java.security.MessageDigest
 
 /**
  * Uninstall protection (parental control), two layers:
  *  1. Device admin: while active, Android refuses to uninstall Abhi Utility.
  *  2. ReelCounterService covers every screen that could undo that (uninstall
  *     dialog, Abhi Utility's App info, device admin and accessibility settings)
- *     with a password pad. The App Lock password, the Diary password or the
- *     fingerprint unlocks those screens for a few minutes.
+ *     with a password pad. The App Lock password or the fingerprint unlocks
+ *     those screens for a few minutes. (Not the Diary password: anyone can
+ *     create that one, so it must never undo the parent's protection.)
  *
  * Turned off only from inside the app (App Lock tab, behind its password).
  */
@@ -46,7 +46,7 @@ object UninstallProtection {
             .putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                 "Stops children from uninstalling Abhi Utility. Only someone with the App Lock " +
-                    "or Diary password can turn this off (Abhi Utility → App Lock).",
+                    "password can turn this off (Abhi Utility → App Lock).",
             )
 
     /** Turns everything off so the app can be uninstalled normally. */
@@ -55,26 +55,12 @@ object UninstallProtection {
         if (isAdminActive(context)) dpm(context).removeActiveAdmin(admin(context))
     }
 
-    fun hasAnyPassword(context: Context): Boolean = AppLock.hasPin(context) || diaryHash(context) != null
+    /** Protection needs the App Lock password (the Diary password doesn't count). */
+    fun hasAnyPassword(context: Context): Boolean = AppLock.hasPin(context)
 
-    /** The App Lock password or the Diary password. */
-    fun checkPassword(context: Context, pin: String): Boolean {
-        if (pin.isEmpty()) return false
-        if (AppLock.checkPin(context, pin)) return true
-        val (salt, hash) = diaryHash(context) ?: return false
-        return MessageDigest.isEqual(sha256Hex("$salt:$pin").toByteArray(), hash.toByteArray())
-    }
-
-    /** Diary password (salt, hash) saved by the Flutter app (DiaryLock, shared_preferences). */
-    private fun diaryHash(context: Context): Pair<String, String>? {
-        val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        val salt = prefs.getString("flutter.diary_pin_salt", null) ?: return null
-        val hash = prefs.getString("flutter.diary_pin_hash", null) ?: return null
-        return salt to hash
-    }
-
-    private fun sha256Hex(s: String): String =
-        MessageDigest.getInstance("SHA-256").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+    /** Only the App Lock password. */
+    fun checkPassword(context: Context, pin: String): Boolean =
+        pin.isNotEmpty() && AppLock.checkPin(context, pin)
 }
 
 /** Device admin with no policies: it only makes Android refuse to uninstall the app. */

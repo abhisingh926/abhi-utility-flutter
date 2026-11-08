@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -7,24 +8,38 @@ import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../account/backup_crypto.dart';
+
 /// Optional password for the Diary (its own password; the App Lock one opens it too).
 /// Only a salted SHA-256 hash is stored.
 class DiaryLock {
   static const _hashKey = 'diary_pin_hash';
   static const _saltKey = 'diary_pin_salt';
 
-  /// One unlock for the Diary and App Lock: the App Lock password, the Diary
-  /// password or the fingerprint opens both, until the app is left or someone
-  /// taps a lock button. Pages only ask when they are actually opened.
+  /// Diary unlocked (until the app is left or someone taps a lock button).
+  /// Pages only ask when they are actually opened.
   static final unlocked = ValueNotifier<bool>(false);
 
-  static void unlockAll() => unlocked.value = true;
+  /// App Lock unlocked. Only the App Lock password (or its fingerprint) sets
+  /// this: the Diary password can be created by anyone, so it must never open
+  /// App Lock or uninstall protection (the parent's settings).
+  static final appLockUnlocked = ValueNotifier<bool>(false);
+
+  /// App Lock password / fingerprint: opens App Lock and the Diary.
+  static void unlockAll() {
+    appLockUnlocked.value = true;
+    unlocked.value = true;
+  }
+
+  /// Diary password / fingerprint: opens only the Diary.
+  static void unlockDiary() => unlocked.value = true;
 
   /// Changes when the Diary and App Lock lock again (app left, lock button, restore).
   static final relock = ValueNotifier<int>(0);
 
   static void lockNow() {
     unlocked.value = false;
+    appLockUnlocked.value = false;
     relock.value++;
   }
 
@@ -42,14 +57,29 @@ class DiaryLock {
 
   static const _appLock = MethodChannel('abhi_utility/applock');
 
-  /// The Diary password or the App Lock password.
-  static Future<bool> checkAnyPassword(String pin) async {
-    if (await isEnabled() && await check(pin)) return true; // check() is true when no diary password
+  /// The App Lock password (never the Diary one).
+  static Future<bool> checkAppLockPassword(String pin) async {
     try {
       return await _appLock.invokeMethod<bool>('checkPin', {'pin': pin}) ?? false;
     } catch (_) {
       return false;
     }
+  }
+
+  /// Diary lock screen: the Diary password opens the Diary; the App Lock
+  /// password opens both. Returns false for a wrong password.
+  static Future<bool> unlockDiaryWith(String pin) async {
+    if (await isEnabled() && await check(pin)) { // check() is true when no diary password
+      unlockDiary();
+      // Diary password set before encrypted backups existed: make the key now.
+      if (await backupKey() == null) unawaited(_cacheBackupKey(pin).catchError((_) {}));
+      return true;
+    }
+    if (await checkAppLockPassword(pin)) {
+      unlockAll();
+      return true;
+    }
+    return false;
   }
 
   static Future<bool> isEnabled() async =>
@@ -61,6 +91,31 @@ class DiaryLock {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_saltKey, salt);
     await prefs.setString(_hashKey, _hash(salt, pin));
+    await _cacheBackupKey(pin);
+  }
+
+  // ---- Backup encryption key -------------------------------------------------------------
+  // Cloud backups are encrypted with a key made from the diary password. The key
+  // is kept on this phone only (Android backup is off), so automatic backups
+  // don't have to ask for the password. No diary password = no encryption.
+
+  static const _bkKey = 'diary_backup_key';
+  static const _bkSalt = 'diary_backup_salt';
+
+  static Future<void> _cacheBackupKey(String pin) async {
+    final salt = BackupCrypto.newSalt();
+    final key = await BackupCrypto.deriveKey(pin, salt);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_bkSalt, base64Encode(salt));
+    await prefs.setString(_bkKey, base64Encode(key));
+  }
+
+  /// The key (and its salt) for encrypting backups, or null when not set up.
+  static Future<({Uint8List key, Uint8List salt})?> backupKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final k = prefs.getString(_bkKey), s = prefs.getString(_bkSalt);
+    if (k == null || s == null || !prefs.containsKey(_hashKey)) return null;
+    return (key: base64Decode(k), salt: base64Decode(s));
   }
 
   static Future<bool> check(String pin) async {
@@ -76,6 +131,8 @@ class DiaryLock {
     await prefs.remove(_hashKey);
     await prefs.remove(_saltKey);
     await prefs.remove(_bioKey);
+    await prefs.remove(_bkKey);
+    await prefs.remove(_bkSalt);
   }
 
   static String _hash(String salt, String pin) => sha256.convert(utf8.encode('$salt:$pin')).toString();

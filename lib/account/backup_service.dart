@@ -1,11 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../diary/diary_lock.dart';
 import '../diary/journal_store.dart';
 import 'api_client.dart';
+import 'backup_crypto.dart';
 import 'user_scope.dart';
 
 /// One backup as listed by the server.
@@ -33,7 +36,13 @@ class BackupInfo {
 /// Payload: `{ v: 1, prefs: { "journal:<id>": json, "diary:<date>": json }, images: { fileName: sha256 } }`.
 /// Keys in the payload have no account prefix; on the phone they live under the
 /// logged-in account's prefix ([UserScope]), so only that account's data is sent.
-/// Photos are uploaded separately, once each, keyed by SHA-256.
+/// Photos are uploaded separately, once each, keyed by SHA-256 of the uploaded bytes.
+///
+/// With a diary password, everything is encrypted on the phone first
+/// ([BackupCrypto], key from [DiaryLock.backupKey]): the payload becomes
+/// `{ v: 2, enc, kdf, iter, salt, data }` around the v1 JSON, photos are
+/// uploaded encrypted, and `plain` (fileName -> sha256 of the real photo) lets a
+/// restore skip photos the phone already has. The server can't read any of it.
 class BackupService {
   static const _api = '/api/v1/backups';
 
@@ -73,14 +82,30 @@ class BackupService {
       }
     }
 
+    // Diary password set -> encrypted backup. Its key is made when the password
+    // is set or entered, so a password from an older version needs one unlock first.
+    final secret = await DiaryLock.backupKey();
+    if (secret == null && await DiaryLock.isEnabled()) {
+      throw ApiException(0, 'backup_key_missing',
+          'Open the Diary once with its password, then back up again (backups are now encrypted).');
+    }
+    // The bytes that go to the server for a photo.
+    Future<Uint8List> upload(File f) async {
+      final bytes = await f.readAsBytes();
+      return secret == null ? bytes : BackupCrypto.encrypt(secret.key, bytes, deterministic: true);
+    }
+
     // Hash every photo that still exists on the phone.
-    final images = <String, String>{}; // file name -> sha256
-    final files = <String, File>{}; // sha256 -> file
+    final images = <String, String>{}; // file name -> sha256 of the uploaded bytes
+    final plain = <String, String>{}; // file name -> sha256 of the photo itself
+    final files = <String, File>{}; // sha256 (uploaded) -> file
     for (final name in imageNames) {
       final f = await JournalStore.imageFile(name);
       if (!await f.exists()) continue;
-      final sha = sha256.convert(await f.readAsBytes()).toString();
+      final bytes = await upload(f);
+      final sha = sha256.convert(bytes).toString();
       images[name] = sha;
+      if (secret != null) plain[name] = sha256.convert(await f.readAsBytes()).toString();
       files[sha] = f;
     }
 
@@ -90,14 +115,25 @@ class BackupService {
       final missing = (check['missing'] as List).cast<String>();
       for (var i = 0; i < missing.length; i++) {
         progress?.call('Uploading photo ${i + 1} of ${missing.length}…');
-        await api.putBytes('$_api/photos/${missing[i]}', await files[missing[i]]!.readAsBytes());
+        await api.putBytes('$_api/photos/${missing[i]}', await upload(files[missing[i]]!));
       }
     }
 
-    progress?.call('Saving backup…');
+    progress?.call(secret == null ? 'Saving backup…' : 'Encrypting and saving backup…');
+    final inner = jsonEncode({'v': 1, 'prefs': data, 'images': images, if (secret != null) 'plain': plain});
+    final payload = secret == null
+        ? inner
+        : jsonEncode({
+            'v': 2,
+            'enc': 'aes-256-gcm',
+            'kdf': 'pbkdf2-sha256',
+            'iter': BackupCrypto.iterations,
+            'salt': base64Encode(secret.salt),
+            'data': base64Encode(await BackupCrypto.encrypt(secret.key, utf8.encode(inner))),
+          });
     await api.json('POST', _api, body: {
-      'payload': jsonEncode({'v': 1, 'prefs': data, 'images': images}),
-      'encrypted': false,
+      'payload': payload,
+      'encrypted': secret != null,
       'photoHashes': files.keys.toList(),
       'meta': {'entries': entries, 'taskDays': taskDays, 'photos': files.length},
       'device': Platform.operatingSystem,
@@ -148,22 +184,59 @@ class BackupService {
     return raw == null ? null : DateTime.tryParse(raw);
   }
 
+  /// A photo file name from a backup, or null if it isn't a plain file name
+  /// (never write outside the diary's photo folder).
+  static String? _safeName(String name) =>
+      RegExp(r'^[A-Za-z0-9._-]{1,200}$').hasMatch(name) && !name.startsWith('.') ? name : null;
+
   /// Replaces the diary and tasks on this phone with backup [id].
-  static Future<void> restore(int id, {void Function(String)? progress}) async {
+  /// [askPassword] is called for an encrypted backup made with another diary
+  /// password (e.g. on another phone); null/empty = cancelled.
+  static Future<void> restore(int id,
+      {void Function(String)? progress, Future<String?> Function()? askPassword}) async {
     final api = ApiClient.instance;
     progress?.call('Downloading backup…');
     final b = await api.json('GET', '$_api/$id');
-    final payload = jsonDecode(b['payload'] as String) as Map<String, dynamic>;
+    var payload = jsonDecode(b['payload'] as String) as Map<String, dynamic>;
+
+    // Encrypted: use this phone's key if it made the backup, else ask.
+    Uint8List? key;
+    String? enteredPassword;
+    if (payload['v'] == 2) {
+      final salt = base64Decode(payload['salt'] as String);
+      final local = await DiaryLock.backupKey();
+      if (local != null && base64Encode(local.salt) == payload['salt']) {
+        key = local.key;
+      } else {
+        enteredPassword = askPassword == null ? null : await askPassword();
+        if (enteredPassword == null || enteredPassword.isEmpty) {
+          throw ApiException(0, 'cancelled', 'This backup is encrypted: its diary password is needed to restore it.');
+        }
+        progress?.call('Unlocking backup…');
+        key = await BackupCrypto.deriveKey(enteredPassword, salt, rounds: (payload['iter'] as num).toInt());
+      }
+      try {
+        final inner = await BackupCrypto.decrypt(key, base64Decode(payload['data'] as String));
+        payload = jsonDecode(utf8.decode(inner)) as Map<String, dynamic>;
+      } on WrongBackupPassword {
+        throw ApiException(0, 'wrong_password', 'Wrong diary password for this backup.');
+      }
+    }
+
     final data = (payload['prefs'] as Map).cast<String, String>();
     final images = (payload['images'] as Map? ?? {}).cast<String, String>();
+    final plain = (payload['plain'] as Map? ?? {}).cast<String, String>();
 
     // Photos first, so a failed download leaves the current diary untouched.
-    final names = images.keys.toList();
+    final names = images.keys.where((n) => _safeName(n) != null).toList();
     for (var i = 0; i < names.length; i++) {
       final f = await JournalStore.imageFile(names[i]);
-      if (await f.exists() && sha256.convert(await f.readAsBytes()).toString() == images[names[i]]) continue;
+      final want = key == null ? images[names[i]] : plain[names[i]];
+      if (want != null && await f.exists() && sha256.convert(await f.readAsBytes()).toString() == want) continue;
       progress?.call('Downloading photo ${i + 1} of ${names.length}…');
-      await f.writeAsBytes(await api.getBytes('$_api/photos/${images[names[i]]}'), flush: true);
+      var bytes = await api.getBytes('$_api/photos/${images[names[i]]}');
+      if (key != null) bytes = await BackupCrypto.decrypt(key, bytes);
+      await f.writeAsBytes(bytes, flush: true);
     }
 
     progress?.call('Restoring…');
@@ -176,6 +249,10 @@ class BackupService {
       if (UserScope.isDataKey(e.key)) await prefs.setString(scope + e.key, e.value);
     }
     await prefs.setBool(scope + JournalStore.migratedKey, true);
+
+    // The diary comes back locked: no diary password on this phone yet -> use
+    // the one the backup was encrypted with.
+    if (enteredPassword != null && !await DiaryLock.isEnabled()) await DiaryLock.setPin(enteredPassword);
   }
 
   static Future<void> delete(int id) => ApiClient.instance.json('DELETE', '$_api/$id');

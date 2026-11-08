@@ -25,22 +25,27 @@ const _offlineMessage = 'The cloud server is not available right now. '
 
 /// Logged-in user (subset of the backend's publicUser).
 class AccountUser {
-  AccountUser({required this.id, required this.email, this.name, this.accountToken});
+  AccountUser({required this.id, required this.email, this.name, this.accountToken, this.avatarVersion});
 
   factory AccountUser.fromJson(Map<String, dynamic> j) => AccountUser(
       id: j['id'] as int,
       email: j['email'] as String,
       name: j['name'] as String?,
-      accountToken: j['accountToken'] as String?);
+      accountToken: j['accountToken'] as String?,
+      avatarVersion: j['avatarVersion'] as String?);
 
   final int id;
   final String email;
   final String? name;
 
+  /// Changes whenever the profile photo changes; null = no photo.
+  final String? avatarVersion;
+
   /// Sent to Google Play / Apple with a purchase, so renewals reach this account.
   final String? accountToken;
 
-  Map<String, dynamic> toJson() => {'id': id, 'email': email, 'name': name, 'accountToken': accountToken};
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'email': email, 'name': name, 'accountToken': accountToken, 'avatarVersion': avatarVersion};
 }
 
 /// Whether the user may use the app: free trial or paid Pro (backend `entitlement`).
@@ -279,6 +284,24 @@ class ApiClient {
   Future<void> updateName(String name) async {
     await json('PATCH', '/api/v1/me', body: {'name': name.trim()});
     await refreshAccount();
+  }
+
+  /// Uploads a new profile photo (a JPEG made by squareAvatarJpeg); returns the new version.
+  Future<String?> uploadAvatar(Uint8List jpeg) async {
+    final j = await putBytes('/api/v1/me/avatar', jpeg);
+    return (await _saveUser(j))?.avatarVersion;
+  }
+
+  /// Removes the profile photo.
+  Future<void> removeAvatar() async => _saveUser(await json('DELETE', '/api/v1/me/avatar'));
+
+  Future<AccountUser?> _saveUser(Map<String, dynamic> j) async {
+    if (j['user'] is! Map) return null;
+    final u = AccountUser.fromJson(j['user'] as Map<String, dynamic>);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kUser, jsonEncode(u.toJson()));
+    user.value = u;
+    return u;
   }
 
   /// Deletes the account and its backups on the server, then logs out here.

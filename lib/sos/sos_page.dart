@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../applock/accessibility_disclosure.dart';
 
 /// SOS: draw an "S" on the lock screen and the SOS contacts are called one after
 /// another until someone answers. Runs natively (Sos.kt, in ReelCounterService).
@@ -25,7 +26,6 @@ class SosContact {
 
 class SosPageState extends State<SosPage> {
   static const _channel = MethodChannel('abhi_utility/sos');
-  static const _reels = MethodChannel('abhi_utility/reels');
 
   bool _loaded = false;
   bool _on = false;
@@ -205,7 +205,7 @@ class SosPageState extends State<SosPage> {
             _Warning(
               text: 'The Abhi Utility accessibility service is off. SOS needs it to work on the lock screen.',
               button: 'Turn on',
-              onPressed: () => _reels.invokeMethod('openSettings'),
+              onPressed: () => openAccessibilityWithConsent(context),
             ),
           if (!_permissions)
             _Warning(

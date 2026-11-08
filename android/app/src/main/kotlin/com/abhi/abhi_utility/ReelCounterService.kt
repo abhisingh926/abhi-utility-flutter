@@ -1129,7 +1129,7 @@ class ReelCounterService : AccessibilityService() {
         Toast.makeText(this, "Unlocked for ${UninstallProtection.UNLOCK_MS / 60_000} minutes", Toast.LENGTH_SHORT).show()
     }
 
-    /** "Protected by Abhi Utility": App Lock / Diary password or fingerprint, or go back. */
+    /** "Protected by Abhi Utility": App Lock password or fingerprint, or go back. */
     private fun showGuard() {
         if (guardView != null) return
         val wm = windowManager ?: return
@@ -1148,7 +1148,7 @@ class ReelCounterService : AccessibilityService() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             addView(padTitle("🛡️ Protected by Abhi Utility", 22f), centered())
-            addView(padTitle("Enter the App Lock or Diary password\nto uninstall or change Abhi Utility", 15f, 200),
+            addView(padTitle("Enter the App Lock password\nto uninstall or change Abhi Utility", 15f, 200),
                 centered().apply { topMargin = dp(6f) })
             addView(dots, centered().apply { topMargin = dp(16f) })
             addView(error, centered().apply { bottomMargin = dp(8f) })
