@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -403,3 +404,8 @@ void _applyEdits(XmlDocument doc, Map<int, String> edits, Map<int, String> forma
     }
   }
 }
+
+/// [saveXlsx] on a background isolate. Top-level on purpose: a closure created inside a
+/// widget's State method also captures the State, which can't be sent to an isolate.
+Future<Uint8List> saveXlsxInBackground(Uint8List original, Workbook book, Map<SheetData, Map<int, String>> edits) =>
+    Isolate.run(() => saveXlsx(original, book, edits));

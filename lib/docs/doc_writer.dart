@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -483,3 +484,9 @@ Uint8List newDocument() {
   });
   return Uint8List.fromList(ZipEncoder().encode(archive));
 }
+
+/// [saveDocx] on a background isolate. Top-level on purpose: a closure created inside a
+/// widget's State method also captures the State (and the whole widget tree), which can't
+/// be sent to an isolate ("Illegal argument in isolate message").
+Future<Uint8List> saveDocxInBackground(Uint8List original, DocEdits edits) =>
+    Isolate.run(() => saveDocx(original, edits));

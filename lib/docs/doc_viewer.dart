@@ -1,4 +1,3 @@
-import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -351,7 +350,7 @@ class _DocViewerState extends State<DocViewer> {
       } else {
         final edits = _collectEdits();
         final original = _bytes!;
-        bytes = await Isolate.run(() => saveDocx(original, edits));
+        bytes = await saveDocxInBackground(original, edits);
       }
       final (file, copied) = await docStore.save(_file, bytes);
       final doc = await readDocument(bytes, file.name);

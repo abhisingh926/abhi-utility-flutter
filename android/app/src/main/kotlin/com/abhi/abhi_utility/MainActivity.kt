@@ -84,7 +84,21 @@ class MainActivity : FlutterFragmentActivity() {
                     ReelStats.setOverlayEnabled(this, call.argument<Boolean>("enabled") ?: true)
                     result.success(null)
                 }
-                "appNames" -> result.success(ReelApps.NAMES)
+                // Display names: built-in reel apps, the apps being counted, and any [pkgs] asked for
+                // (e.g. apps that were counted earlier and still show up in the history).
+                "appNames" -> {
+                    val extra = call.argument<List<String>>("pkgs") ?: emptyList()
+                    val names = LinkedHashMap<String, String>(ReelApps.NAMES)
+                    for (pkg in ReelApps.counted(this) + extra) {
+                        if (pkg !in names) names[pkg] = AppLock.appLabel(this, pkg)
+                    }
+                    result.success(names)
+                }
+                "countedApps" -> result.success(ReelApps.counted(this).toList())
+                "setCountedApps" -> {
+                    ReelApps.setCounted(this, call.argument<List<String>>("pkgs") ?: emptyList())
+                    result.success(null)
+                }
                 "initialTab" -> result.success(intent?.getStringExtra("tab"))
                 else -> result.notImplemented()
             }

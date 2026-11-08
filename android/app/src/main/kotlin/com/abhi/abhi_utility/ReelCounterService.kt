@@ -73,6 +73,9 @@ class ReelCounterService : AccessibilityService() {
             "com.abhi.abhi_utility",
         )
 
+        /** After the fingerprint prompt closes, ignore window changes this long (the locked app returning). */
+        private const val FINGERPRINT_SETTLE_MS = 1500L
+
         private const val MIN_HEIGHT_RATIO = 0.7f
         private const val MIN_GAP_MS = 400L
         private const val POLL_SHORTS_MS = 700L
@@ -269,13 +272,16 @@ class ReelCounterService : AccessibilityService() {
 
     // App lock.
     private var lockRules: Map<String, AppLock.Rule> = emptyMap()
+
+    /** Apps whose reels are counted (chosen in the app; refreshed on every app switch). */
+    private var reelApps: Set<String> = ReelApps.NAMES.keys
     private var blockView: View? = null
     private var blockedPkg: String? = null
     private var countdownView: TextView? = null
     private var pinView: View? = null
 
-    /** Apps whose time is tracked: reel apps plus apps with a lock rule. */
-    private fun isTracked(pkg: String) = pkg in ReelApps.NAMES || pkg in lockRules
+    /** Apps whose time is tracked: counted reel apps plus apps with a lock rule. */
+    private fun isTracked(pkg: String) = pkg in reelApps || pkg in lockRules
 
     private val pollTask = object : Runnable {
         override fun run() {
@@ -489,19 +495,22 @@ class ReelCounterService : AccessibilityService() {
             }
             checkUninstallGuard(active)
             sos?.onWindowChanged(active)
-            if (active !in IGNORED_PACKAGES) setForeground(active)
+            // While the fingerprint prompt is up (and just after), the locked app is still
+            // "in front": on Samsung the prompt is its own app, which would otherwise clear the
+            // lock and skip the "how much more time?" screen.
+            if (active !in IGNORED_PACKAGES && !fingerprintBusy()) setForeground(active)
             // Includes this app itself, so the ⬇ button hides when Abhi Utility opens.
             if (active != "com.android.systemui") {
                 anyForegroundPkg = active
                 updateBubble()
             }
-            if (pkg in ReelApps.NAMES) lastIndex.keys.removeAll { it.startsWith("$pkg|") }
+            if (pkg in reelApps) lastIndex.keys.removeAll { it.startsWith("$pkg|") }
         }
 
         if (!isTracked(pkg)) return
         // Missed the screen change (e.g. service restarted while the app was open).
         if (fgPkg != pkg && rootInActiveWindow?.packageName?.toString() == pkg) setForeground(pkg)
-        if (pkg in ReelApps.NAMES && event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+        if (pkg in reelApps && event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             onScroll(pkg, event)
         }
     }
@@ -510,6 +519,7 @@ class ReelCounterService : AccessibilityService() {
 
     private fun setForeground(pkg: String?) {
         lockRules = AppLock.rules(this) // the user may have changed them in the app
+        reelApps = ReelApps.counted(this)
         val next = pkg?.takeIf { isTracked(it) }
         if (next == fgPkg) return
         saveTime()
@@ -524,11 +534,11 @@ class ReelCounterService : AccessibilityService() {
         }
         fgSince = SystemClock.elapsedRealtime()
         lastSave = fgSince
-        if (next == YOUTUBE && !polling) {
+        if (next == YOUTUBE && next in reelApps && !polling) {
             polling = true
             handler.post(pollTask)
         }
-        if (next in ReelApps.NAMES) showOverlay() else hideOverlay()
+        if (next in reelApps) showOverlay() else hideOverlay()
         checkLock()
         handler.post(tickTask)
     }
@@ -903,6 +913,13 @@ class ReelCounterService : AccessibilityService() {
     private var fingerprintPkg: String? = null
     private val fingerprintTimeout = Runnable { onFingerprintResult(fingerprintPkg ?: "", false) }
 
+    /** Until when (elapsedRealtime) window changes from the closing prompt are ignored. */
+    private var fingerprintSettleUntil = 0L
+
+    /** The fingerprint prompt is open, or just closed and the locked app is coming back. */
+    private fun fingerprintBusy() =
+        fingerprintPkg != null || SystemClock.elapsedRealtime() < fingerprintSettleUntil
+
     private fun startFingerprint(pkg: String, name: String, subtitle: String? = null) {
         fingerprintPkg = pkg
         setOverlaysHidden(true) // the prompt must be visible and tappable
@@ -921,6 +938,7 @@ class ReelCounterService : AccessibilityService() {
         handler.removeCallbacks(fingerprintTimeout)
         val expected = fingerprintPkg
         fingerprintPkg = null
+        fingerprintSettleUntil = SystemClock.elapsedRealtime() + FINGERPRINT_SETTLE_MS
         setOverlaysHidden(false)
         if (expected == GUARD_PKG) {
             if (success && pkg == GUARD_PKG) unlockGuard()
@@ -1046,7 +1064,7 @@ class ReelCounterService : AccessibilityService() {
         // Back to normal use (e.g. the hour rolled over): restart the clock and the counter.
         if (pkg != null && pkg == fgPkg) {
             fgSince = SystemClock.elapsedRealtime()
-            if (pkg in ReelApps.NAMES) showOverlay()
+            if (pkg in reelApps) showOverlay()
         }
     }
 
@@ -1261,7 +1279,7 @@ class ReelCounterService : AccessibilityService() {
     private fun updateOverlay() {
         val view = overlay ?: return
         val pkg = fgPkg ?: return
-        if (pkg !in ReelApps.NAMES || blockedPkg != null) return
+        if (pkg !in reelApps || blockedPkg != null) return
         if (!ReelStats.isOverlayEnabled(this)) {
             hideOverlay()
             return
@@ -1271,7 +1289,7 @@ class ReelCounterService : AccessibilityService() {
             ((SystemClock.elapsedRealtime() - fgSince) / 1000).toInt()
         val appReels = counts[pkg] ?: 0
         val allReels = counts.values.sum()
-        val name = ReelApps.NAMES[pkg] ?: ""
+        val name = AppLock.appLabel(this, pkg)
         val minutes = secs / 60
         val time = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
 
@@ -1418,7 +1436,7 @@ class ReelCounterService : AccessibilityService() {
         }
         val total = counts.values.sum()
         val detail = counts.entries.sortedByDescending { it.value }
-            .joinToString(" · ") { "${ReelApps.NAMES[it.key] ?: it.key} ${it.value}" }
+            .joinToString(" · ") { "${AppLock.appLabel(this, it.key)} ${it.value}" }
 
         val open = PendingIntent.getActivity(
             this, 2, Intent(this, MainActivity::class.java).putExtra("tab", "reels"),

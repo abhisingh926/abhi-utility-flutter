@@ -1,6 +1,7 @@
 package com.abhi.abhi_utility
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -24,6 +25,29 @@ object ReelApps {
         "com.ss.android.ugc.trill" to "TikTok",
         "com.roposo.android" to "Roposo",
     )
+
+    // Which apps are counted is chosen in the app (Reels → Apps counted).
+    // SharedPreferences "reel_apps", key "counted": JSON array of package names.
+    // Not set yet = every app in [NAMES].
+    private const val PREFS = "reel_apps"
+    private const val KEY_COUNTED = "counted"
+
+    /** Apps whose reels are counted (and which show the counter on top). */
+    fun counted(context: Context): Set<String> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_COUNTED, null)
+            ?: return NAMES.keys
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }.toSet()
+        } catch (_: Exception) {
+            NAMES.keys
+        }
+    }
+
+    fun setCounted(context: Context, pkgs: Collection<String>) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_COUNTED, JSONArray(pkgs.distinct()).toString()).apply()
+    }
 }
 
 /**

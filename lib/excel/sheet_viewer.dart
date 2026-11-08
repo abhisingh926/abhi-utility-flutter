@@ -1,4 +1,3 @@
-import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -202,7 +201,7 @@ class _SheetViewerState extends State<SheetViewer> {
       final edits = {for (final e in _edits.entries) e.key: Map<int, String>.of(e.value)};
       final bytes = book.isCsv
           ? saveCsv(book.sheets.first, book.csvSeparator!)
-          : await Isolate.run(() => saveXlsx(original, book, edits));
+          : await saveXlsxInBackground(original, book, edits);
       final (file, copied) = await sheetStore.save(_file, bytes);
       final reloaded = await readWorkbook(bytes, file.name);
       if (!mounted) return true;
