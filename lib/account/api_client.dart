@@ -250,13 +250,41 @@ class ApiClient {
 
   // ---- Auth -------------------------------------------------------------------------
 
+  /// What happened to the referral code given at the last [register] (null = none given).
+  Map<String, dynamic>? lastReferral;
+
   /// Creates the account; returns true when the free trial started.
-  Future<bool> register({required String email, required String password, String? name}) async {
+  Future<bool> register({required String email, required String password, String? name, String? referralCode}) async {
     final j = await _send('POST', '/api/v1/auth/register',
-        body: {'email': email, 'password': password, if (name != null && name.isNotEmpty) 'name': name},
+        body: {
+          'email': email,
+          'password': password,
+          if (name != null && name.isNotEmpty) 'name': name,
+          if (referralCode != null && referralCode.trim().isNotEmpty) 'referralCode': referralCode.trim(),
+        },
         auth: false);
     await _saveSession(j);
+    lastReferral = j['referral'] is Map ? j['referral'] as Map<String, dynamic> : null;
     return j['trialStarted'] == true;
+  }
+
+  /// Changes the password (other devices are logged out; this one stays logged in).
+  Future<void> changePassword({required String current, required String newPassword}) async {
+    final j = await json('POST', '/api/v1/auth/change-password',
+        body: {'currentPassword': current, 'newPassword': newPassword});
+    await _saveSession(j);
+  }
+
+  /// Updates the display name.
+  Future<void> updateName(String name) async {
+    await json('PATCH', '/api/v1/me', body: {'name': name.trim()});
+    await refreshAccount();
+  }
+
+  /// Deletes the account and its backups on the server, then logs out here.
+  Future<void> deleteAccount(String password) async {
+    await json('DELETE', '/api/v1/me', body: {'password': password});
+    await _clearSession();
   }
 
   /// Logs in; returns true when the free trial started (older accounts).

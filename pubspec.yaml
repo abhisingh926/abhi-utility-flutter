@@ -49,6 +49,9 @@ dependencies:
   html: ^0.15.7
   flutter_inappwebview: 6.2.0-beta.3
   in_app_purchase: ^3.3.1
+  archive: ^4.6.0
+  xml: ^7.1.0
+  two_dimensional_scrollables: ^0.5.6
 
 # flutter_inappwebview_android 1.1.x uses proguard-android.txt, which AGP 9 rejects.
 # 1.2.0-beta.3 switches to proguard-android-optimize.txt. Remove once a stable release has the fix.

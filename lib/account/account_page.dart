@@ -97,6 +97,7 @@ class _AuthFormState extends State<_AuthForm> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+  final _referral = TextEditingController();
   late bool _register = widget.register;
   bool _busy = false;
   bool _showPassword = false;
@@ -138,8 +139,13 @@ class _AuthFormState extends State<_AuthForm> {
       final days = SubscriptionService.instance.trialDays;
       final bool trialStarted;
       if (_register) {
-        trialStarted =
-            await ApiClient.instance.register(email: email, password: _password.text, name: _name.text.trim());
+        trialStarted = await ApiClient.instance.register(
+            email: email, password: _password.text, name: _name.text.trim(), referralCode: _referral.text);
+        final ref = ApiClient.instance.lastReferral;
+        if (ref != null && ref['applied'] != true) {
+          // Account made, but the code couldn't be used (e.g. this email used one before).
+          messenger.showSnackBar(SnackBar(content: Text('Referral code not used: ${ref['message'] ?? ''}')));
+        }
       } else {
         trialStarted = await ApiClient.instance.login(email: email, password: _password.text);
       }
@@ -255,6 +261,17 @@ class _AuthFormState extends State<_AuthForm> {
                     decoration: const InputDecoration(
                         labelText: 'Confirm password', prefixIcon: Icon(Icons.lock_outline), border: OutlineInputBorder()),
                     validator: (v) => v == _password.text ? null : 'Passwords do not match',
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _referral,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Referral code (optional)',
+                      helperText: "Got a code from a friend? They'll get a free month",
+                      prefixIcon: Icon(Icons.card_giftcard),
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                 ],
                 if (_error != null) ...[

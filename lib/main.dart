@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'account/backup_service.dart';
 import 'account/account_page.dart';
 import 'account/api_client.dart';
+import 'account/profile_page.dart';
 import 'account/subscription_page.dart';
 import 'account/subscription_service.dart';
 import 'apk/apk_extractor_page.dart';
@@ -19,6 +20,8 @@ import 'diary/journal_page.dart';
 import 'diary/tasks_page.dart';
 import 'downloader/downloader_page.dart';
 import 'downloader/quick_download.dart';
+import 'excel/excel_page.dart';
+import 'excel/sheet_store.dart';
 import 'pdf/pdf_scanner_page.dart';
 import 'pdf/pdf_viewer_page.dart';
 import 'pdf/pdf_store.dart';
@@ -74,6 +77,7 @@ class _HomeShellState extends State<HomeShell> {
   static const _tasksTab = 9;
   static const _apkTab = 10;
   static const _zipTab = 11;
+  static const _excelTab = 12;
 
   /// Every feature: drives both the Home page cards and the bottom bar.
   static const _features = [
@@ -99,6 +103,8 @@ class _HomeShellState extends State<HomeShell> {
         subtitle: 'Share or save the APK of any app', color: Colors.lightGreen),
     HomeFeature(tab: _zipTab, icon: Icons.folder_zip_outlined, title: 'Zip',
         subtitle: 'Zip, unzip, view & lock zip files', color: Colors.indigo),
+    HomeFeature(tab: _excelTab, icon: Icons.table_chart_outlined, title: 'Excel Viewer',
+        subtitle: 'View all Excel & CSV files', color: Color(0xFF1D6F42)),
   ];
 
   final _homeKey = GlobalKey<HomePageState>();
@@ -108,6 +114,7 @@ class _HomeShellState extends State<HomeShell> {
   final _downloaderKey = GlobalKey<DownloaderPageState>();
   final _apkKey = GlobalKey<ApkExtractorPageState>();
   final _zipKey = GlobalKey<ZipPageState>();
+  final _excelKey = GlobalKey<ExcelPageState>();
   int _tab = _homeTab;
 
   /// Features shown in the bottom bar after Home (chosen on the Home page).
@@ -159,6 +166,25 @@ class _HomeShellState extends State<HomeShell> {
       final uri = await PdfStore.channel.invokeMethod<String>('takeIncoming');
       if (uri != null) await _openIncomingPdf(uri);
     });
+
+    // "Open with → Abhi Utility" for Excel / CSV files: while running…
+    SheetStore.channel.setMethodCallHandler((call) async {
+      if (call.method == 'incomingSheet') await _openIncomingSheet(call.arguments as String);
+    });
+    // …and when the app was started by it.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final uri = await SheetStore.channel.invokeMethod<String>('takeIncoming');
+      if (uri != null) await _openIncomingSheet(uri);
+    });
+  }
+
+  Future<void> _openIncomingSheet(String uri) async {
+    if (!mounted) return;
+    _select(_excelTab);
+    // No trial / subscription: the Excel tab shows the paywall instead of the file.
+    if (!ApiClient.instance.hasAccess) return;
+    await Future<void>.delayed(const Duration(milliseconds: 100)); // let the tab build
+    await _excelKey.currentState?.openIncoming(uri);
   }
 
   Future<void> _openDownloader(Map launch) async {
@@ -195,7 +221,8 @@ class _HomeShellState extends State<HomeShell> {
   /// Bumped after a backup restore so the Diary and Tasks pages reload.
   int _dataVersion = 0;
 
-  void _openAccount() => AccountPage.open(context);
+  /// Logged in: Profile (details, subscription, referrals, backup). Logged out: login.
+  void _openAccount() => ProfilePage.open(context);
 
   void _onRestored() {
     if (!mounted) return;
@@ -252,8 +279,8 @@ class _HomeShellState extends State<HomeShell> {
             ValueListenableBuilder<AccountUser?>(
               valueListenable: ApiClient.instance.user,
               builder: (context, user, _) => IconButton(
-                tooltip: user == null ? 'Login / Register' : 'Backup & account',
-                icon: Icon(user == null ? Icons.account_circle_outlined : Icons.cloud_done_outlined),
+                tooltip: user == null ? 'Login / Register' : 'Profile',
+                icon: Icon(user == null ? Icons.account_circle_outlined : Icons.account_circle),
                 onPressed: _openAccount,
               ),
             ),
@@ -294,6 +321,7 @@ class _HomeShellState extends State<HomeShell> {
                 TasksPage(key: ValueKey('tasks$_dataVersion')),
                 ApkExtractorPage(key: _apkKey),
                 ZipPage(key: _zipKey),
+                ExcelPage(key: _excelKey),
               ],
             ),
             if (_tab != _homeTab)

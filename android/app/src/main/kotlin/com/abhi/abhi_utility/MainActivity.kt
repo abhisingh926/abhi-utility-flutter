@@ -265,6 +265,14 @@ class MainActivity : FlutterFragmentActivity() {
 
         MethodChannel(messenger, "abhi_utility/app").setMethodCallHandler { call, result ->
             when (call.method) {
+                "shareText" -> {
+                    val send = Intent(Intent.ACTION_SEND)
+                        .setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, call.argument<String>("text") ?: "")
+                    call.argument<String>("subject")?.let { send.putExtra(Intent.EXTRA_SUBJECT, it) }
+                    startActivity(Intent.createChooser(send, call.argument<String>("title") ?: "Share"))
+                    result.success(null)
+                }
                 "info" -> result.success(
                     mapOf("version" to AppShare.versionName(this), "apkSize" to AppShare.apkSize(this))
                 )
@@ -316,13 +324,52 @@ class MainActivity : FlutterFragmentActivity() {
                     // PDF this app was opened with ("Open with → Abhi Utility"), if any.
                     "takeIncoming" -> {
                         val uri = incomingPdfUri(intent)
-                        intent?.data = null // only once
+                        if (uri != null) intent?.data = null // only once (and leave spreadsheets alone)
                         result.success(uri)
                     }
                     else -> result.notImplemented()
                 }
             } catch (e: Exception) {
                 result.error("PDF_ERROR", e.message, null)
+            }
+        }
+
+        // Excel viewer: list / read spreadsheets, "All files access", "Open with".
+        sheetsChannel = MethodChannel(messenger, "abhi_utility/sheets")
+        sheetsChannel!!.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "hasAllFilesAccess" -> result.success(SheetFiles.hasAllFilesAccess(this))
+                "requestAllFilesAccess" -> {
+                    SheetFiles.requestAllFilesAccess(this)
+                    result.success(null)
+                }
+                "scan" -> Thread {
+                    try {
+                        val list = SheetFiles.scan(this)
+                        runOnUiThread { result.success(list) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("SCAN_FAILED", e.message, null) }
+                    }
+                }.start()
+                "read" -> {
+                    val source = call.argument<String>("source")!!
+                    Thread {
+                        try {
+                            val bytes = SheetFiles.read(this, source)
+                            runOnUiThread { result.success(bytes) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("READ_FAILED", e.message, null) }
+                        }
+                    }.start()
+                }
+                "displayName" -> result.success(SheetFiles.displayName(this, call.argument<String>("uri")!!))
+                // Spreadsheet this app was opened with ("Open with → Abhi Utility"), if any.
+                "takeIncoming" -> {
+                    val uri = SheetFiles.incomingUri(this, intent)
+                    if (uri != null) intent?.data = null // only once
+                    result.success(uri)
+                }
+                else -> result.notImplemented()
             }
         }
 
@@ -468,8 +515,11 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun incomingPdfUri(i: Intent?): String? {
         if (i?.action != Intent.ACTION_VIEW) return null
+        if (SheetFiles.incomingUri(this, i) != null) return null // Excel/CSV: the Excel viewer
         return i.data?.toString()
     }
+
+    private var sheetsChannel: MethodChannel? = null
 
     private var downloaderChannel: MethodChannel? = null
     private var pendingStatusPick: MethodChannel.Result? = null
@@ -526,6 +576,7 @@ class MainActivity : FlutterFragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         incomingPdfUri(intent)?.let { pdfChannel?.invokeMethod("incomingPdf", it) }
+        SheetFiles.incomingUri(this, intent)?.let { sheetsChannel?.invokeMethod("incomingSheet", it) }
         downloaderLaunch(intent)?.let { downloaderChannel?.invokeMethod("launch", it) }
     }
 

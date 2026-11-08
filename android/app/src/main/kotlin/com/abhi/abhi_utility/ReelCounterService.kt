@@ -87,6 +87,10 @@ class ReelCounterService : AccessibilityService() {
 
         /** Show the "min left" countdown when this many seconds are left. */
         private const val COUNTDOWN_FROM_S = 120
+        /** How long the "min left" warning stays on screen. */
+        private const val COUNTDOWN_FLASH_MS = 2000L
+        /** From here on the "Locking in N" pill stays visible until the lock. */
+        private const val FINAL_COUNTDOWN_S = 10
 
         /**
          * Apps where the floating ⬇ (download) button appears while a video plays.
@@ -556,9 +560,33 @@ class ReelCounterService : AccessibilityService() {
             return
         }
         hideBlockScreen()
-        if (status.remainingSeconds <= COUNTDOWN_FROM_S) showCountdown(pkg, status.remainingSeconds)
-        else hideCountdown()
+        val remaining = status.remainingSeconds
+        when {
+            // Last seconds: keep the "Locking in N" pill on screen.
+            remaining <= FINAL_COUNTDOWN_S -> {
+                handler.removeCallbacks(hideCountdownTask)
+                showCountdown(pkg, remaining)
+            }
+            // "2 min left" / "1 min left": flash once for a moment, then hide.
+            remaining <= COUNTDOWN_FROM_S -> {
+                val mark = if (remaining <= 60) 60 else COUNTDOWN_FROM_S
+                if (countdownFlashed.add("$pkg:$mark")) {
+                    showCountdown(pkg, remaining)
+                    handler.removeCallbacks(hideCountdownTask)
+                    handler.postDelayed(hideCountdownTask, COUNTDOWN_FLASH_MS)
+                }
+            }
+            else -> {
+                // Plenty of time (e.g. time was added): allow the warnings again.
+                countdownFlashed.removeAll { it.startsWith("$pkg:") }
+                hideCountdown()
+            }
+        }
     }
+
+    /** Warnings already flashed, as "pkg:secondsMark". */
+    private val countdownFlashed = HashSet<String>()
+    private val hideCountdownTask = Runnable { hideCountdown() }
 
     // ---- Countdown pill ("2 min left" … "Locking in 3") -----------------------------
 
