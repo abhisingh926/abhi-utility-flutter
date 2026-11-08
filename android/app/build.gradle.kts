@@ -61,3 +61,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Zip tool: password-protected (AES-256) zips.
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
+}

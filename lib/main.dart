@@ -6,6 +6,7 @@ import 'account/account_page.dart';
 import 'account/api_client.dart';
 import 'account/subscription_page.dart';
 import 'account/subscription_service.dart';
+import 'apk/apk_extractor_page.dart';
 import 'applock/app_lock_page.dart';
 import 'flashlight_page.dart';
 import 'package:pdfrx/pdfrx.dart' show pdfrxFlutterInitialize;
@@ -23,6 +24,7 @@ import 'pdf/pdf_viewer_page.dart';
 import 'pdf/pdf_store.dart';
 import 'reels/reels_page.dart';
 import 'vpn/vpn_page.dart';
+import 'zip/zip_page.dart';
 
 /// Entry point of the quick download panel (QuickDownloadActivity): a small
 /// panel over the current app instead of the full Abhi Utility.
@@ -70,6 +72,8 @@ class _HomeShellState extends State<HomeShell> {
   static const _diaryTab = 7;
   static const _downloaderTab = 8;
   static const _tasksTab = 9;
+  static const _apkTab = 10;
+  static const _zipTab = 11;
 
   /// Every feature: drives both the Home page cards and the bottom bar.
   static const _features = [
@@ -91,6 +95,10 @@ class _HomeShellState extends State<HomeShell> {
         subtitle: 'Private diary with password', color: Colors.blue),
     HomeFeature(tab: _downloaderTab, icon: Icons.download_for_offline_outlined, title: 'Downloader',
         subtitle: 'Save videos & images from links', color: Colors.green),
+    HomeFeature(tab: _apkTab, icon: Icons.android, title: 'APK Extractor',
+        subtitle: 'Share or save the APK of any app', color: Colors.lightGreen),
+    HomeFeature(tab: _zipTab, icon: Icons.folder_zip_outlined, title: 'Zip',
+        subtitle: 'Zip, unzip, view & lock zip files', color: Colors.indigo),
   ];
 
   final _homeKey = GlobalKey<HomePageState>();
@@ -98,6 +106,8 @@ class _HomeShellState extends State<HomeShell> {
   final _lockKey = GlobalKey<AppLockPageState>();
   final _viewerKey = GlobalKey<PdfViewerHomePageState>();
   final _downloaderKey = GlobalKey<DownloaderPageState>();
+  final _apkKey = GlobalKey<ApkExtractorPageState>();
+  final _zipKey = GlobalKey<ZipPageState>();
   int _tab = _homeTab;
 
   /// Features shown in the bottom bar after Home (chosen on the Home page).
@@ -122,7 +132,8 @@ class _HomeShellState extends State<HomeShell> {
     // Saved login + trial status first (works offline), then the latest from the server.
     ApiClient.instance.load().then((_) => _refreshAccount());
     SubscriptionService.instance.init(); // catches Play purchases that finish later
-    _lifecycle = AppLifecycleListener(onResume: _refreshAccount);
+    // Leaving the app locks App Lock + Diary (not for the photo picker / our own system screens).
+    _lifecycle = AppLifecycleListener(onResume: _refreshAccount, onPause: DiaryLock.onAppPaused);
     AccountPage.restoredVersion.addListener(_onRestored);
     // Opened from the daily reel report notification -> show the Reels tab.
     const MethodChannel('abhi_utility/reels').invokeMethod<String>('initialTab').then((tab) {
@@ -201,10 +212,8 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _select(int i) {
-    // Leaving App Lock locks it again (password needed next time).
-    if (_tab == _lockTab && i != _lockTab) _lockKey.currentState?.relock();
-    // Leaving the Diary tab locks the diary (if it has a password).
-    if (_tab == _diaryTab && i != _diaryTab) DiaryLock.lockNow();
+    // App Lock and the Diary share one unlock: switching tabs keeps them open;
+    // leaving the app (or a lock button) locks both (DiaryLock.onAppPaused).
     // Leaving the Downloader clears the link box (the link stays in Recent links).
     if (_tab == _downloaderTab && i != _downloaderTab) _downloaderKey.currentState?.reset();
     setState(() => _tab = i);
@@ -212,6 +221,8 @@ class _HomeShellState extends State<HomeShell> {
     if (i == _reelsTab) _reelsKey.currentState?.refresh();
     if (i == _lockTab) _lockKey.currentState?.refresh();
     if (i == _viewerTab) _viewerKey.currentState?.refresh();
+    if (i == _apkTab) _apkKey.currentState?.refresh();
+    if (i == _zipTab) _zipKey.currentState?.refresh();
   }
 
   @override
@@ -272,12 +283,17 @@ class _HomeShellState extends State<HomeShell> {
                 const FlashlightPage(),
                 const VpnPage(),
                 ReelsPage(key: _reelsKey),
-                AppLockPage(key: _lockKey),
+                // active: on screen and not behind the subscription paywall.
+                AppLockPage(key: _lockKey, active: _tab == _lockTab && ApiClient.instance.hasAccess),
                 const PdfScannerPage(),
                 PdfViewerHomePage(key: _viewerKey),
-                JournalPage(key: ValueKey('journal$_dataVersion')),
+                JournalPage(
+                    key: ValueKey('journal$_dataVersion'),
+                    active: _tab == _diaryTab && ApiClient.instance.hasAccess),
                 DownloaderPage(key: _downloaderKey),
                 TasksPage(key: ValueKey('tasks$_dataVersion')),
+                ApkExtractorPage(key: _apkKey),
+                ZipPage(key: _zipKey),
               ],
             ),
             if (_tab != _homeTab)

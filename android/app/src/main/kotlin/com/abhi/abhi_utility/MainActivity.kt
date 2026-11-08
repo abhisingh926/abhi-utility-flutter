@@ -185,6 +185,84 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
+        // Zip tool: create, view, extract, lock / unlock zips (ZipTool.kt).
+        MethodChannel(messenger, "abhi_utility/zip").setMethodCallHandler { call, result ->
+            fun <T> bg(work: () -> T) = Thread {
+                try {
+                    val r = work()
+                    runOnUiThread { result.success(r) }
+                } catch (_: ZipTool.WrongPassword) {
+                    runOnUiThread { result.error("WRONG_PASSWORD", "Wrong password", null) }
+                } catch (e: Throwable) {
+                    runOnUiThread { result.error("ZIP_FAILED", e.message ?: e.javaClass.simpleName, null) }
+                }
+            }.start()
+            fun s(key: String) = call.argument<String>(key)
+            when (call.method) {
+                "localCopy" -> bg { ZipTool.localCopy(this, s("src")!!) }
+                "create" -> bg {
+                    ZipTool.create(this, call.argument<List<Map<String, String>>>("files")!!, s("name")!!, s("password"))
+                }
+                "list" -> bg { ZipTool.list(s("path")!!) }
+                "checkPassword" -> bg { ZipTool.checkPassword(s("path")!!, s("password")!!) }
+                "preview" -> bg { ZipTool.preview(this, s("path")!!, s("password"), s("entry")!!) }
+                "extract" -> bg {
+                    ZipTool.extract(this, s("path")!!, s("password"), call.argument<List<String>>("entries"), s("folder")!!)
+                }
+                "relock" -> bg { ZipTool.relock(this, s("path")!!, s("password"), s("newPassword"), s("name")!!) }
+                "recent" -> bg { ZipTool.recent(this) }
+                "delete" -> bg { ZipTool.delete(this, s("uri")!!); null }
+                "share" -> { ZipTool.share(this, s("uri")!!, s("name")!!); result.success(null) }
+                "openWith" -> {
+                    try {
+                        ZipTool.openWith(this, s("uri")!!, s("name")!!)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("NO_APP", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // APK Extractor: list apps, save their APK to Downloads, share / open it.
+        MethodChannel(messenger, "abhi_utility/apk").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "list" -> Thread {
+                    try {
+                        val apps = ApkExtractor.list(this, call.argument<Boolean>("system") ?: false)
+                        runOnUiThread { result.success(apps) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("LIST_FAILED", e.message, null) }
+                    }
+                }.start()
+                "export" -> Thread {
+                    val pkg = call.argument<String>("pkg")!!
+                    val action = call.argument<String>("action") ?: "save"
+                    try {
+                        val (uri, name) = ApkExtractor.export(this, pkg)
+                        runOnUiThread {
+                            try {
+                                when (action) {
+                                    "share" -> ApkExtractor.share(this, uri, name)
+                                    "open" -> ApkExtractor.open(this, uri, name)
+                                }
+                            } catch (_: Exception) {
+                            }
+                            result.success(mapOf("uri" to uri.toString(), "name" to name))
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("EXPORT_FAILED", e.message, null) }
+                    }
+                }.start()
+                "appInfo" -> {
+                    ApkExtractor.openAppInfo(this, call.argument<String>("pkg")!!)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         MethodChannel(messenger, "abhi_utility/app").setMethodCallHandler { call, result ->
             when (call.method) {
                 "info" -> result.success(

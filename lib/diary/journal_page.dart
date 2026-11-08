@@ -8,13 +8,16 @@ import 'journal_store.dart';
 
 /// Diary: list of entries (newest first) with photos, grouped by month.
 class JournalPage extends StatefulWidget {
-  const JournalPage({super.key});
+  const JournalPage({super.key, this.active = false});
+
+  /// True while the Diary tab is on screen (only then does it ask for the password).
+  final bool active;
 
   @override
   State<JournalPage> createState() => _JournalPageState();
 }
 
-class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
+class _JournalPageState extends State<JournalPage> {
   static const _months = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
@@ -26,37 +29,33 @@ class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
   String _query = '';
   bool _searching = false;
 
-  /// Diary password lock.
+  /// Diary password lock. Unlocked state is shared with App Lock (DiaryLock.unlocked);
+  /// leaving the app locks both (DiaryLock.onAppPaused, from the home shell).
   bool _lockEnabled = false;
-  bool _unlocked = false;
+  bool get _unlocked => DiaryLock.unlocked.value;
 
   /// Fingerprint unlock.
   bool _bioAvailable = false;
   bool _bioEnabled = false;
-  bool _bioPrompted = false; // prompt automatically once per lock
+  bool _bioPrompted = false; // prompt automatically once per lock, only while the tab is shown
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    DiaryLock.relock.addListener(_lockNow);
+    DiaryLock.unlocked.addListener(_onLockChanged);
     _load();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Leaving the app (home button, another app, screen off) locks the diary.
-    if (state == AppLifecycleState.paused && !DiaryLock.pickingPhoto) _lockNow();
+  void _onLockChanged() {
+    if (!_unlocked) _bioPrompted = false;
+    if (mounted) setState(() {});
   }
 
-  void _lockNow() {
-    _bioPrompted = false;
-    if (_unlocked && mounted) setState(() => _unlocked = false);
-  }
+  void _lockNow() => DiaryLock.lockNow(); // locks App Lock too
 
   Future<void> _unlockWithFingerprint() async {
     _bioPrompted = true;
-    if (await DiaryLock.authenticate() && mounted) setState(() => _unlocked = true);
+    if (await DiaryLock.authenticate()) DiaryLock.unlockAll();
   }
 
   /// Offer fingerprint unlock (needs one successful scan to switch on).
@@ -100,10 +99,8 @@ class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
           ),
         );
         if (ok) {
-          setState(() {
-            _lockEnabled = true;
-            _unlocked = true;
-          });
+          setState(() => _lockEnabled = true);
+          DiaryLock.unlockAll();
           _snack('🔒 Diary locked with a password');
           await _askEnableFingerprint();
         }
@@ -159,8 +156,7 @@ class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    DiaryLock.relock.removeListener(_lockNow);
+    DiaryLock.unlocked.removeListener(_onLockChanged);
     super.dispose();
   }
 
@@ -189,8 +185,9 @@ class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_lockEnabled && !_unlocked) {
-      // Ask for the fingerprint straight away; the password pad stays as a fallback.
-      if (_bioEnabled && !_bioPrompted) {
+      // Opened: ask for the fingerprint straight away (never while another tab is
+      // shown — every tab is built in the background); the password pad stays as a fallback.
+      if (widget.active && _bioEnabled && !_bioPrompted) {
         _bioPrompted = true;
         WidgetsBinding.instance.addPostFrameCallback((_) => _unlockWithFingerprint());
       }
@@ -199,10 +196,12 @@ class _JournalPageState extends State<JournalPage> with WidgetsBindingObserver {
           Expanded(
             child: PinPad(
               title: '🔒 Your diary is locked',
-              subtitle: _bioEnabled ? 'Use your fingerprint or the diary password' : 'Enter your diary password',
+              subtitle: _bioEnabled
+                  ? 'Use your fingerprint, the diary or the App Lock password'
+                  : 'Enter the diary or the App Lock password',
               onSubmit: (pin) async {
-                if (!await DiaryLock.check(pin)) return 'Wrong password';
-                setState(() => _unlocked = true);
+                if (!await DiaryLock.checkAnyPassword(pin)) return 'Wrong password';
+                DiaryLock.unlockAll(); // opens App Lock too
                 return null;
               },
             ),

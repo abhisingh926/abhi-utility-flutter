@@ -7,7 +7,10 @@ import 'pin_pad.dart';
 /// App Lock: pick apps and a rule (always locked / daily limit / hourly limit).
 /// Enforcement happens natively in ReelCounterService.kt (Accessibility Service).
 class AppLockPage extends StatefulWidget {
-  const AppLockPage({super.key});
+  const AppLockPage({super.key, this.active = false});
+
+  /// True while the App Lock tab is on screen (only then does it ask for the password).
+  final bool active;
 
   @override
   State<AppLockPage> createState() => AppLockPageState();
@@ -90,43 +93,49 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   bool _hasPin = false;
   bool _fingerprint = true;
   bool _bioAvailable = false;
-  bool _bioPrompted = false; // ask for the fingerprint once each time the tab locks
-  bool _unlocked = false;
+  bool _bioPrompted = false; // ask for the fingerprint once per lock, only while the tab is shown
+
+  /// Shared with the Diary: unlocking either opens both; leaving the app locks both.
+  bool get _unlocked => DiaryLock.unlocked.value;
   List<LockRule> _rules = [];
 
   /// Uninstall protection: {on, admin, guard, hasPassword} from the native side.
   Map<String, bool> _protection = const {};
-
-  /// True while Android's "Activate device admin" screen is open (leaving for it mustn't relock).
-  bool _inSystemScreen = false;
   List<InstalledApp>? _apps;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    DiaryLock.unlocked.addListener(_onLockChanged);
     refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    DiaryLock.unlocked.removeListener(_onLockChanged);
+    super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) refresh();
-    // Leaving the app locks the tab again.
-    if (state == AppLifecycleState.paused && !_inSystemScreen) relock();
   }
 
-  void relock() {
-    _bioPrompted = false;
-    if (_unlocked && mounted) setState(() => _unlocked = false);
+  void _onLockChanged() {
+    if (!_unlocked) _bioPrompted = false;
+    if (mounted) setState(() {});
   }
+
+  /// Lock button: locks App Lock and the Diary.
+  void relock() => DiaryLock.lockNow();
 
   bool get _useFingerprint => _fingerprint && _bioAvailable;
 
   Future<void> _unlockWithFingerprint() async {
     _bioPrompted = true;
-    if (await DiaryLock.authenticate(reason: 'Unlock App Lock') && mounted) {
-      setState(() => _unlocked = true);
-    }
+    if (await DiaryLock.authenticate(reason: 'Unlock App Lock and Diary')) DiaryLock.unlockAll();
   }
 
   Future<void> refresh() async {
@@ -298,7 +307,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       ),
     );
     if (go != true) return;
-    _inSystemScreen = true;
+    DiaryLock.openingSystemScreen = true; // Android's "Activate device admin" screen mustn't lock us
     try {
       final s = await _channel.invokeMapMethod<String, bool>('enableProtection') ?? const {};
       if (!mounted) return;
@@ -311,7 +320,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     } on PlatformException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message ?? 'Could not turn on protection')));
     } finally {
-      _inSystemScreen = false;
+      DiaryLock.openingSystemScreen = false;
     }
   }
 
@@ -370,17 +379,16 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     if (!_hasPin) {
       return PinSetup(onDone: (pin) async {
         await _channel.invokeMethod('setPin', {'pin': pin});
-        setState(() {
-          _hasPin = true;
-          _unlocked = true;
-        });
+        setState(() => _hasPin = true);
+        DiaryLock.unlockAll();
         return null;
       });
     }
     // 2. Ask for it before showing or changing locks.
     if (!_unlocked) {
-      // Same as the diary: ask for the fingerprint straight away, password as fallback.
-      if (_useFingerprint && !_bioPrompted) {
+      // Opened: ask for the fingerprint straight away (never while another tab is
+      // shown — every tab is built in the background); password as fallback.
+      if (widget.active && _useFingerprint && !_bioPrompted) {
         _bioPrompted = true;
         WidgetsBinding.instance.addPostFrameCallback((_) => _unlockWithFingerprint());
       }
@@ -390,12 +398,11 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
             child: PinPad(
               title: 'App Lock is password protected',
               subtitle: _useFingerprint
-                  ? 'Use your fingerprint or the password to see or change locks'
-                  : 'Enter the password to see or change locks',
+                  ? 'Use your fingerprint, the App Lock or the Diary password'
+                  : 'Enter the App Lock or the Diary password',
               onSubmit: (pin) async {
-                final ok = await _channel.invokeMethod<bool>('checkPin', {'pin': pin}) ?? false;
-                if (!ok) return 'Wrong password';
-                setState(() => _unlocked = true);
+                if (!await DiaryLock.checkAnyPassword(pin)) return 'Wrong password';
+                DiaryLock.unlockAll(); // opens the Diary too
                 return null;
               },
             ),
@@ -547,11 +554,6 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     );
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
 }
 
 /// Searchable, filterable, multi-select list of installed apps.
