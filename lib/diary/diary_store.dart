@@ -107,5 +107,28 @@ class DiaryStore {
     return marks;
   }
 
+  /// Unfinished tasks scheduled on days after [day], soonest first (then by time).
+  static Future<List<({DateTime date, DiaryTask task})>> upcoming(DateTime day) async {
+    final prefs = await SharedPreferences.getInstance();
+    final afterKey = _prefix + key(day);
+    final result = <({DateTime date, DiaryTask task})>[];
+    for (final k in prefs.getKeys()) {
+      if (!k.startsWith(_prefix) || k.compareTo(afterKey) <= 0) continue;
+      final date = DateTime.tryParse(k.substring(_prefix.length));
+      final raw = prefs.getString(k);
+      if (date == null || raw == null) continue;
+      final d = DiaryDay.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      for (final t in d.unfinished) {
+        result.add((date: dateOnly(date), task: t));
+      }
+    }
+    result.sort((a, b) {
+      final byDate = a.date.compareTo(b.date);
+      if (byDate != 0) return byDate;
+      return (a.task.time ?? '99:99').compareTo(b.task.time ?? '99:99');
+    });
+    return result;
+  }
+
   static String newId() => DateTime.now().microsecondsSinceEpoch.toString();
 }

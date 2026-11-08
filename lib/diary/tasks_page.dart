@@ -26,6 +26,12 @@ class _TasksPageState extends State<TasksPage> {
   final _newTaskFocus = FocusNode();
   TimeOfDay? _newTaskTime;
 
+  /// Day to schedule the new task on (null = the day being viewed).
+  DateTime? _newTaskDate;
+
+  /// Unfinished tasks on future days (only shown when viewing today).
+  List<({DateTime date, DiaryTask task})> _upcoming = [];
+
   @override
   void initState() {
     super.initState();
@@ -42,12 +48,51 @@ class _TasksPageState extends State<TasksPage> {
       final todayTexts = data.tasks.map((t) => t.text).toSet();
       carry = yesterday.unfinished.where((t) => !todayTexts.contains(t.text)).toList();
     }
+    final upcoming = _isToday ? await DiaryStore.upcoming(_day) : <({DateTime date, DiaryTask task})>[];
     if (!mounted) return;
     setState(() {
       _data = data;
       _carryOver = carry;
+      _upcoming = upcoming;
       _loading = false;
+      _sortTasks();
     });
+  }
+
+  Future<void> _loadUpcoming() async {
+    if (!_isToday) return;
+    final upcoming = await DiaryStore.upcoming(_day);
+    if (mounted) setState(() => _upcoming = upcoming);
+  }
+
+  /// "Today", "Tomorrow", or e.g. "Mon, 10 Nov" (adds the year if it's not this year).
+  String _fmtDate(DateTime d) {
+    final today = DiaryStore.dateOnly(DateTime.now());
+    final diff = DiaryStore.dateOnly(d).difference(today).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Tomorrow';
+    final base = '${_weekdays[d.weekday - 1]}, ${d.day} ${_months[d.month - 1]}';
+    return d.year == today.year ? base : '$base ${d.year}';
+  }
+
+  Future<DateTime?> _pickDate(DateTime initial) {
+    final today = DiaryStore.dateOnly(DateTime.now());
+    return showDatePicker(
+      context: context,
+      initialDate: initial.isBefore(today) ? today : initial,
+      firstDate: initial.isBefore(today) ? initial : today,
+      lastDate: DateTime(today.year + 5, 12, 31),
+      helpText: 'Schedule for',
+    ).then((d) => d == null ? null : DiaryStore.dateOnly(d));
+  }
+
+  void _showScheduled(String message, DateTime date) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        action: SnackBarAction(label: 'View', onPressed: () => _goTo(date)),
+      ));
   }
 
   Future<void> _save() => DiaryStore.save(_day, _data);
@@ -93,20 +138,38 @@ class _TasksPageState extends State<TasksPage> {
     });
   }
 
-  void _addTask() {
+  Future<void> _addTask() async {
     final text = _newTask.text.trim();
     if (text.isEmpty) return;
-    setState(() {
-      _data.tasks.add(DiaryTask(
-        id: DiaryStore.newId(),
-        text: text,
-        time: _newTaskTime == null ? null : _toHHmm(_newTaskTime!),
-      ));
-      _sortTasks();
-      _newTask.clear();
-      _newTaskTime = null;
-    });
-    _save();
+    final task = DiaryTask(
+      id: DiaryStore.newId(),
+      text: text,
+      time: _newTaskTime == null ? null : _toHHmm(_newTaskTime!),
+    );
+    final target = _newTaskDate ?? _day;
+    if (target == _day) {
+      setState(() {
+        _data.tasks.add(task);
+        _sortTasks();
+        _newTask.clear();
+        _newTaskTime = null;
+        _newTaskDate = null;
+      });
+      _save();
+    } else {
+      // Scheduled for another day: save it there and stay on this page.
+      final other = await DiaryStore.load(target);
+      other.tasks.add(task);
+      await DiaryStore.save(target, other);
+      if (!mounted) return;
+      setState(() {
+        _newTask.clear();
+        _newTaskTime = null;
+        _newTaskDate = null;
+      });
+      _loadUpcoming();
+      _showScheduled('Scheduled "$text" for ${_fmtDate(target)}', target);
+    }
     _newTaskFocus.requestFocus(); // ready for the next one
   }
 
@@ -140,6 +203,7 @@ class _TasksPageState extends State<TasksPage> {
     final controller = TextEditingController(text: t.text);
     var time = t.time;
     var important = t.important;
+    var date = _day;
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -156,6 +220,17 @@ class _TasksPageState extends State<TasksPage> {
                 decoration: const InputDecoration(border: OutlineInputBorder()),
               ),
               const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ActionChip(
+                  avatar: const Icon(Icons.event, size: 18),
+                  label: Text(_fmtDate(date)),
+                  onPressed: () async {
+                    final picked = await _pickDate(date);
+                    if (picked != null) setDialog(() => date = picked);
+                  },
+                ),
+              ),
               Row(
                 children: [
                   ActionChip(
@@ -199,13 +274,23 @@ class _TasksPageState extends State<TasksPage> {
       ),
     );
     if (result != true || controller.text.trim().isEmpty) return;
-    setState(() {
-      t.text = controller.text.trim();
-      t.time = time;
-      t.important = important;
-      _sortTasks();
-    });
-    _save();
+    t.text = controller.text.trim();
+    t.time = time;
+    t.important = important;
+    if (date == _day) {
+      setState(_sortTasks);
+      _save();
+      return;
+    }
+    // Moved to another day.
+    final other = await DiaryStore.load(date);
+    other.tasks.add(t);
+    await DiaryStore.save(date, other);
+    if (!mounted) return;
+    setState(() => _data.tasks.remove(t));
+    await _save();
+    _loadUpcoming();
+    _showScheduled('Moved "${t.text}" to ${_fmtDate(date)}', date);
   }
 
   Future<void> _moveCarryOver() async {
@@ -395,21 +480,37 @@ class _TasksPageState extends State<TasksPage> {
                             textInputAction: TextInputAction.done,
                             onSubmitted: (_) => _addTask(),
                             decoration: InputDecoration(
-                              hintText: 'Add a task…',
+                              hintText: _newTaskDate == null || _newTaskDate == _day
+                                  ? 'Add a task…'
+                                  : 'Add a task for ${_fmtDate(_newTaskDate!)}…',
                               prefixIcon: const Icon(Icons.add_task),
                               border: const OutlineInputBorder(),
                               isDense: true,
-                              suffixIcon: IconButton(
-                                tooltip: 'Set a time',
-                                icon: Icon(Icons.schedule,
-                                    color: _newTaskTime == null ? null : scheme.primary),
-                                onPressed: () async {
-                                  final picked = await showTimePicker(
-                                    context: context,
-                                    initialTime: _newTaskTime ?? TimeOfDay.now(),
-                                  );
-                                  if (picked != null) setState(() => _newTaskTime = picked);
-                                },
+                              suffixIcon: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Schedule for a date',
+                                    icon: Icon(Icons.event,
+                                        color: _newTaskDate == null ? null : scheme.primary),
+                                    onPressed: () async {
+                                      final picked = await _pickDate(_newTaskDate ?? _day);
+                                      if (picked != null) setState(() => _newTaskDate = picked);
+                                    },
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Set a time',
+                                    icon: Icon(Icons.schedule,
+                                        color: _newTaskTime == null ? null : scheme.primary),
+                                    onPressed: () async {
+                                      final picked = await showTimePicker(
+                                        context: context,
+                                        initialTime: _newTaskTime ?? TimeOfDay.now(),
+                                      );
+                                      if (picked != null) setState(() => _newTaskTime = picked);
+                                    },
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -418,18 +519,68 @@ class _TasksPageState extends State<TasksPage> {
                         IconButton.filled(onPressed: _addTask, icon: const Icon(Icons.add)),
                       ],
                     ),
-                    if (_newTaskTime != null)
+                    if (_newTaskDate != null || _newTaskTime != null)
                       Padding(
-                        padding: const EdgeInsets.only(top: 4, left: 4),
-                        child: Text('⏰ ${_newTaskTime!.format(context)}',
-                            style: TextStyle(color: scheme.primary)),
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Wrap(
+                          spacing: 8,
+                          children: [
+                            if (_newTaskDate != null)
+                              InputChip(
+                                avatar: const Icon(Icons.event, size: 18),
+                                label: Text(_fmtDate(_newTaskDate!)),
+                                onPressed: () async {
+                                  final picked = await _pickDate(_newTaskDate!);
+                                  if (picked != null) setState(() => _newTaskDate = picked);
+                                },
+                                onDeleted: () => setState(() => _newTaskDate = null),
+                              ),
+                            if (_newTaskTime != null)
+                              InputChip(
+                                avatar: const Icon(Icons.schedule, size: 18),
+                                label: Text(_newTaskTime!.format(context)),
+                                onDeleted: () => setState(() => _newTaskTime = null),
+                              ),
+                          ],
+                        ),
                       ),
                     if (total == 0)
                       Padding(
                         padding: const EdgeInsets.only(top: 6),
-                        child: Text('Tip: tap a task to edit, swipe left to delete, ⭐ for important.',
+                        child: Text('Tip: tap a task to edit, swipe left to delete, ⭐ for important, '
+                            '📅 to schedule it for a later day.',
                             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
                       ),
+
+                    // ---- Upcoming (scheduled for later days) ----
+                    if (_isToday && _upcoming.isNotEmpty) ...[
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          Text('📅 Upcoming', style: Theme.of(context).textTheme.titleMedium),
+                          const Spacer(),
+                          Text('${_upcoming.length} scheduled',
+                              style: TextStyle(color: scheme.onSurfaceVariant)),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      for (final u in _upcoming.take(10))
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          leading: Icon(u.task.important ? Icons.star : Icons.event_note,
+                              color: u.task.important ? Colors.amber : scheme.primary),
+                          title: Text(u.task.text, maxLines: 2, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(u.task.time == null
+                              ? _fmtDate(u.date)
+                              : '${_fmtDate(u.date)} · ${_fmtTime(u.task.time!)}'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => _goTo(u.date),
+                        ),
+                      if (_upcoming.length > 10)
+                        Text('+ ${_upcoming.length - 10} more – open the calendar to see them',
+                            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+                    ],
 
                   ],
                 ),

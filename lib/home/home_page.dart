@@ -234,7 +234,7 @@ class HomePageState extends State<HomePage> {
             crossAxisSpacing: 12,
             childAspectRatio: 1.05,
             children: [
-              for (final f in widget.features)
+              for (final f in _pinnedFirst())
                 _FeatureCard(
                   feature: f,
                   pinned: widget.pinned.contains(f.tab),
@@ -274,6 +274,12 @@ class HomePageState extends State<HomePage> {
   }
 
   int _tabOf(IconData icon) => widget.features.firstWhere((f) => f.icon == icon).tab;
+
+  /// Features pinned to the bottom bar first (in bar order), then the rest.
+  List<HomeFeature> _pinnedFirst() => [
+        for (final t in widget.pinned) ...widget.features.where((f) => f.tab == t),
+        ...widget.features.where((f) => !widget.pinned.contains(f.tab)),
+      ];
 }
 
 class _StatCard extends StatelessWidget {
