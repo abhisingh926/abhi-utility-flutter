@@ -24,7 +24,7 @@ class _Status {
   bool get isVideo => mime.startsWith('video/');
 }
 
-class _StatusSaverScreenState extends State<StatusSaverScreen> {
+class _StatusSaverScreenState extends State<StatusSaverScreen> with WidgetsBindingObserver {
   static const _channel = MethodChannel('abhi_utility/status');
 
   bool _business = false;
@@ -37,8 +37,23 @@ class _StatusSaverScreenState extends State<StatusSaverScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
   }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back from the "All files access" settings page (or WhatsApp): reload.
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  Future<void> _allowAllFiles() => _channel.invokeMethod('requestAllFiles');
 
   Map<String, Object> get _args => {'business': _business};
 
@@ -190,12 +205,17 @@ class _StatusSaverScreenState extends State<StatusSaverScreen> {
         const SizedBox(height: 12),
         Text(
           'WhatsApp keeps the statuses you view in a hidden folder. Android needs your OK once:\n\n'
-          '1. Tap "Allow access" — a folder screen opens on ".Statuses".\n'
-          '2. Tap "Use this folder", then "Allow".',
+          '1. Tap "Allow access" — Android settings open.\n'
+          '2. Turn on "Allow access to manage all files" for Abhi Utility, then go back.',
           style: TextStyle(color: scheme.onSurfaceVariant),
         ),
         const SizedBox(height: 20),
-        FilledButton.icon(onPressed: _allowAccess, icon: const Icon(Icons.lock_open), label: const Text('Allow access')),
+        FilledButton.icon(onPressed: _allowAllFiles, icon: const Icon(Icons.lock_open), label: const Text('Allow access')),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _allowAccess,
+          child: const Text('Or pick the ".Statuses" folder instead'),
+        ),
         const SizedBox(height: 12),
         Text(
           'Tip: view the status in WhatsApp first, otherwise the folder may not exist yet.',

@@ -8,10 +8,14 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Size
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
+import java.io.File
 import java.io.ByteArrayOutputStream
 
 /**
@@ -19,6 +23,10 @@ import java.io.ByteArrayOutputStream
  * Android/media/<package>/…/Media/.Statuses. Android only lets other apps read
  * that folder after the user picks it once in the system folder picker
  * (Storage Access Framework); the permission is then kept.
+ *
+ * If the app already has "All files access" (Android 11+), the folder is read
+ * directly and the folder picker is not needed. Newer Android versions often
+ * won't let the picker select WhatsApp's hidden folder, so this is the reliable way.
  */
 object StatusSaver {
     const val REQUEST_CODE = 4711
@@ -49,6 +57,15 @@ object StatusSaver {
         return DocumentsContract.getTreeDocumentId(tree).endsWith(".Statuses")
     }
 
+    /** WhatsApp's status folder as a plain file path. */
+    private fun dir(business: Boolean) = File(Environment.getExternalStorageDirectory(), folder(business))
+
+    /** "All files access" granted: read the folder directly, no picker needed. */
+    fun canReadDirect(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+
+    fun hasAccess(c: Context, business: Boolean): Boolean = canReadDirect() || tree(c, business) != null
+
     /** The folder Uri if access was granted (and not revoked since). */
     fun tree(c: Context, business: Boolean): Uri? {
         val saved = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(key(business), null) ?: return null
@@ -59,6 +76,7 @@ object StatusSaver {
 
     /** Statuses (photos and videos), newest first. */
     fun list(c: Context, business: Boolean): List<Map<String, Any?>>? {
+        if (canReadDirect()) return listDirect(business)
         val tree = tree(c, business) ?: return null
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
         val cols = arrayOf(
@@ -84,6 +102,26 @@ object StatusSaver {
             }
         }
         return out.sortedByDescending { it["modified"] as Long }
+    }
+
+    private fun listDirect(business: Boolean): List<Map<String, Any?>> {
+        val files = dir(business).listFiles() ?: return emptyList()
+        return files.asSequence()
+            .filter { it.isFile && !it.name.startsWith(".") }
+            .mapNotNull { f ->
+                val ext = f.extension.lowercase()
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: return@mapNotNull null
+                if (!(mime.startsWith("image/") || mime.startsWith("video/"))) return@mapNotNull null
+                mapOf<String, Any?>(
+                    "uri" to Uri.fromFile(f).toString(),
+                    "name" to f.name,
+                    "mime" to mime,
+                    "modified" to f.lastModified(),
+                    "size" to f.length(),
+                )
+            }
+            .sortedByDescending { it["modified"] as Long }
+            .toList()
     }
 
     /** Small JPEG preview of a photo or video status. */
@@ -144,8 +182,11 @@ object StatusSaver {
     }
 
     fun open(a: Activity, uriString: String, mime: String) {
+        var uri = Uri.parse(uriString)
+        // Other apps can't open file:// links: share it through our FileProvider.
+        if (uri.scheme == "file") uri = FileProvider.getUriForFile(a, "${a.packageName}.files", File(uri.path!!))
         a.startActivity(
-            Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uriString), mime)
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         )
     }

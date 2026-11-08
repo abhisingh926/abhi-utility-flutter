@@ -112,10 +112,23 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   int _total(Map<String, int> m) => m.values.fold(0, (a, b) => a + b);
 
   static String formatTime(int seconds) {
+    if (seconds > 0 && seconds < 60) return '<1 min';
     final m = seconds ~/ 60;
-    if (m >= 60) return '${m ~/ 60}h ${m % 60}m';
+    if (m >= 60) return m % 60 == 0 ? '${m ~/ 60}h' : '${m ~/ 60}h ${m % 60}m';
     return '$m min';
   }
+
+  /// Seconds per app summed over the newest [days] days.
+  Map<String, int> _timeOver(int days) {
+    final out = <String, int>{};
+    for (final day in _seconds.entries.take(days)) {
+      day.value.forEach((pkg, s) => out[pkg] = (out[pkg] ?? 0) + s);
+    }
+    return out;
+  }
+
+  /// Chart metric in the "Last 7 days" card.
+  bool _weekShowsTime = false;
 
   Future<List<InstalledApp>> _loadApps() async {
     if (_installed != null) return _installed!;
@@ -212,6 +225,8 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
           if (_days.isNotEmpty) ...[
             _todayCard(context),
             const SizedBox(height: 12),
+            _timeCard(context),
+            const SizedBox(height: 12),
             _weekCard(context),
             const SizedBox(height: 12),
             _historyCard(context),
@@ -272,6 +287,9 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     final pkgs = {...today.keys, ...todaySecs.keys}.toList()
       ..sort((a, b) => (today[b] ?? 0).compareTo(today[a] ?? 0));
     final diff = total - yesterday;
+    final totalSecs = _total(todaySecs);
+    final yesterdaySecs = _seconds.length > 1 ? _total(_seconds.values.elementAt(1)) : 0;
+    final timeDiff = totalSecs - yesterdaySecs;
 
     return Card(
       child: Padding(
@@ -280,38 +298,153 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Today', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
             Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('$total',
-                    style: Theme.of(context).textTheme.displayMedium?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(width: 8),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text('reels', style: Theme.of(context).textTheme.titleMedium),
+                Expanded(
+                  child: _bigStat(context, '$total', 'reels',
+                      yesterday > 0 || total > 0 ? _compare(diff, '$yesterday') : null, diff),
+                ),
+                Expanded(
+                  child: _bigStat(context, formatTime(totalSecs), 'time spent',
+                      yesterdaySecs > 0 || totalSecs > 0 ? _compare(timeDiff ~/ 60, formatTime(yesterdaySecs), unit: ' min') : null,
+                      timeDiff ~/ 60),
                 ),
               ],
             ),
-            if (yesterday > 0 || total > 0)
-              Text(
-                diff == 0
-                    ? 'Same as yesterday'
-                    : '${diff.abs()} ${diff > 0 ? 'more' : 'fewer'} than yesterday ($yesterday)',
-                style: TextStyle(color: diff > 0 ? Colors.red : Colors.green),
-              ),
-            if (todaySecs.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('⏱ ${formatTime(_total(todaySecs))} in reel apps today'),
-              ),
             const SizedBox(height: 16),
             if (pkgs.isEmpty)
-              const Text('No reels scrolled yet today 🎉')
+              const Text('No reels or time in these apps yet today 🎉')
             else
               for (final p in pkgs)
                 _appRow(context, _appName(p), today[p] ?? 0, total, todaySecs[p] ?? 0),
           ],
         ),
+      ),
+    );
+  }
+
+  String _compare(int diff, String yesterday, {String unit = ''}) => diff == 0
+      ? 'Same as yesterday'
+      : '${diff.abs()}$unit ${diff > 0 ? 'more' : 'less'} than yesterday ($yesterday)';
+
+  Widget _bigStat(BuildContext context, String value, String label, String? note, int diff) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(value,
+            style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.bold)),
+        Text(label, style: TextStyle(color: scheme.onSurfaceVariant)),
+        if (note != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(note,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: diff > 0 ? Colors.red : diff < 0 ? Colors.green : scheme.onSurfaceVariant,
+                )),
+          ),
+      ],
+    );
+  }
+
+  /// Total time in the counted apps: today, 7 and 30 days, and per app (7 days).
+  Widget _timeCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final today = _total(_timeOver(1));
+    final week = _timeOver(7);
+    final weekTotal = _total(week);
+    final month = _total(_timeOver(30));
+    final daysWithData = _seconds.values.take(7).where((d) => _total(d) > 0).length;
+    final perApp = week.entries.where((e) => e.value > 0).toList()..sort((a, b) => b.value.compareTo(a.value));
+
+    Widget period(String label, int secs) => Expanded(
+          child: Column(
+            children: [
+              Text(formatTime(secs),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 2),
+              Text(label, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+            ],
+          ),
+        );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text('Time spent', style: Theme.of(context).textTheme.titleMedium)),
+                if (daysWithData > 0)
+                  Text('avg ${formatTime(weekTotal ~/ 7)} / day', style: TextStyle(color: scheme.onSurfaceVariant)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                period('Today', today),
+                Container(width: 1, height: 36, color: scheme.outlineVariant),
+                period('Last 7 days', weekTotal),
+                Container(width: 1, height: 36, color: scheme.outlineVariant),
+                period('Last 30 days', month),
+              ],
+            ),
+            if (perApp.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text('By app · last 7 days', style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+              const SizedBox(height: 4),
+              for (final e in perApp) _timeRow(context, _appName(e.key), e.value, weekTotal),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _timeRow(BuildContext context, String name, int seconds, int total) {
+    final color = appColor(name);
+    final share = total == 0 ? 0.0 : seconds / total;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(appIcon(name), color: color, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                    Text(formatTime(seconds), style: const TextStyle(fontWeight: FontWeight.bold)),
+                    SizedBox(
+                      width: 44,
+                      child: Text('${(share * 100).round()}%',
+                          textAlign: TextAlign.end,
+                          style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: share,
+                    minHeight: 6,
+                    color: color,
+                    backgroundColor: color.withValues(alpha: 0.12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -359,9 +492,12 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
 
   Widget _weekCard(BuildContext context) {
     final week = _days.take(7).toList().reversed.toList(); // oldest -> today
-    final totals = week.map((e) => _total(e.value)).toList();
+    final showTime = _weekShowsTime;
+    // Reels per day, or seconds per day.
+    final totals = week.map((e) => showTime ? _total(_seconds[e.key] ?? {}) : _total(e.value)).toList();
     final maxVal = totals.fold(1, (a, b) => b > a ? b : a);
     final avg = totals.isEmpty ? 0 : (totals.reduce((a, b) => a + b) / totals.length).round();
+    String label(int v) => showTime ? (v == 0 ? '0' : formatTime(v).replaceAll(' min', 'm')) : '$v';
     const dayNames = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
     final scheme = Theme.of(context).colorScheme;
 
@@ -374,9 +510,21 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
             Row(
               children: [
                 Expanded(child: Text('Last 7 days', style: Theme.of(context).textTheme.titleMedium)),
-                Text('avg $avg / day', style: TextStyle(color: scheme.onSurfaceVariant)),
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Reels')),
+                    ButtonSegment(value: true, label: Text('Time')),
+                  ],
+                  selected: {showTime},
+                  onSelectionChanged: (v) => setState(() => _weekShowsTime = v.first),
+                ),
               ],
             ),
+            const SizedBox(height: 4),
+            Text(showTime ? 'avg ${formatTime(avg)} / day' : 'avg $avg reels / day',
+                style: TextStyle(color: scheme.onSurfaceVariant)),
             const SizedBox(height: 16),
             SizedBox(
               height: 150,
@@ -388,7 +536,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text('${totals[i]}', style: const TextStyle(fontSize: 11)),
+                          Text(label(totals[i]), style: const TextStyle(fontSize: 11)),
                           const SizedBox(height: 4),
                           Container(
                             height: 110 * totals[i] / maxVal + 2,
@@ -426,19 +574,28 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
               child: Text('Daily report', style: Theme.of(context).textTheme.titleMedium),
             ),
             for (var i = 0; i < _days.length; i++)
-              if (i < 2 || _total(_days[i].value) > 0)
+              if (i < 2 || _total(_days[i].value) > 0 || _total(_seconds[_days[i].key] ?? {}) > 0)
                 ListTile(
                   dense: true,
                   title: Text(_dayLabel(_days[i].key, i)),
                   subtitle: _days[i].value.isEmpty
                       ? null
                       : Text(
-                          '${(_days[i].value.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).map((e) => '${_appName(e.key)} ${e.value}').join(' · ')}'
-                          '${(_seconds[_days[i].key] ?? {}).isEmpty ? '' : '\n⏱ ${formatTime(_total(_seconds[_days[i].key]!))}'}',
+                          (_days[i].value.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+                              .map((e) => '${_appName(e.key)} ${e.value}')
+                              .join(' · '),
                           style: TextStyle(color: scheme.onSurfaceVariant),
                         ),
-                  trailing: Text('${_total(_days[i].value)}',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('${_total(_days[i].value)} reels',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      Text(formatTime(_total(_seconds[_days[i].key] ?? {})),
+                          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+                    ],
+                  ),
                 ),
           ],
         ),

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WhatsApp status files opened in another app (StatusSaver.open). -->
+<paths>
+    <external-path name="whatsapp_media" path="Android/media/" />
+</paths>

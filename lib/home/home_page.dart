@@ -1,11 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../account/api_client.dart';
+import '../app_theme.dart';
 import '../account/backup_button.dart';
 import '../account/subscription_page.dart';
 import '../diary/diary_store.dart';
 import 'app_share.dart';
 import 'nav_prefs.dart';
+
+/// Groups the features on the Home page, in this order.
+enum FeatureCategory {
+  documents('Documents'),
+  productivity('Productivity'),
+  security('Security & privacy'),
+  device('Device tools');
+
+  const FeatureCategory(this.label);
+  final String label;
+}
 
 /// A feature shown on the home page.
 class HomeFeature {
@@ -15,6 +28,7 @@ class HomeFeature {
     required this.title,
     required this.subtitle,
     required this.color,
+    required this.category,
   });
 
   /// Bottom-bar tab index it opens.
@@ -23,9 +37,10 @@ class HomeFeature {
   final String title;
   final String subtitle;
   final Color color;
+  final FeatureCategory category;
 }
 
-/// Home: greeting, today's stats, all features, share the app.
+/// Home: greeting with today's numbers, account status, grouped tools, share.
 class HomePage extends StatefulWidget {
   const HomePage({
     super.key,
@@ -74,6 +89,8 @@ class HomePageState extends State<HomePage> {
       _minutesToday = sum(times) ~/ 60;
     } on PlatformException {
       // Reel counter unavailable: leave the stats empty.
+    } on MissingPluginException {
+      // Not on Android (e.g. tests): leave the stats empty.
     }
     final today = await DiaryStore.load(DateTime.now());
     final info = await AppShare.info();
@@ -94,11 +111,11 @@ class HomePageState extends State<HomePage> {
       _snack('${f.title} removed from the bottom bar');
     } else {
       if (pinned.length >= NavPrefs.maxPinned) {
-        _snack('The bottom bar is full (${NavPrefs.maxPinned}). Unpin a feature first.');
+        _snack('The bottom bar is full (${NavPrefs.maxPinned}). Unpin a tool first.');
         return;
       }
       pinned.add(f.tab);
-      _snack('📌 ${f.title} added to the bottom bar');
+      _snack('${f.title} added to the bottom bar');
     }
     widget.onPinnedChanged(pinned);
   }
@@ -113,6 +130,19 @@ class HomePageState extends State<HomePage> {
     if (result != null) widget.onPinnedChanged(result);
   }
 
+  /// Long-press on a tool: what it does, open it, pin / unpin it.
+  Future<void> _showFeature(HomeFeature f) async {
+    HapticFeedback.selectionClick();
+    final pinned = widget.pinned.contains(f.tab);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => _FeatureSheet(feature: f, pinned: pinned),
+    );
+    if (action == 'open') widget.onOpen(f.tab);
+    if (action == 'pin') _togglePin(f);
+  }
+
   void _snack(String msg) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -121,11 +151,9 @@ class HomePageState extends State<HomePage> {
 
   String _greeting() {
     final h = DateTime.now().hour;
-    if (h < 5) return 'Good night 🌙';
-    if (h < 12) return 'Good morning ☀️';
-    if (h < 17) return 'Good afternoon 🌤️';
-    if (h < 21) return 'Good evening 🌆';
-    return 'Good night 🌙';
+    if (h >= 5 && h < 12) return 'Good morning';
+    if (h >= 12 && h < 17) return 'Good afternoon';
+    return 'Good evening';
   }
 
   String _date() {
@@ -142,130 +170,93 @@ class HomePageState extends State<HomePage> {
     return RefreshIndicator(
       onRefresh: refresh,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [
-          // ---- Greeting ----
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF0B1A6B), Color(0xFF3A1C9C), Color(0xFF00A3D9)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+          // ---- Greeting + today ----
+          ValueListenableBuilder<AccountUser?>(
+            valueListenable: ApiClient.instance.user,
+            builder: (context, user, _) => _HeroCard(
+              date: _date(),
+              greeting: _greeting(),
+              name: _firstName(user),
+              reels: _StatData(
+                icon: Icons.slow_motion_video,
+                value: _reelsToday == null ? '—' : '$_reelsToday',
+                label: _minutesToday == null ? 'Reels today' : 'Reels · $_minutesToday min',
+                onTap: () => widget.onOpen(_tabOf(Icons.slow_motion_video)),
+              ),
+              tasks: _StatData(
+                icon: Icons.task_alt,
+                value: _tasksTotal == 0 ? '0' : '$_tasksDone/$_tasksTotal',
+                label: _tasksTotal == 0 ? 'No tasks today' : 'Tasks done',
+                progress: _tasksTotal == 0 ? null : _tasksDone / _tasksTotal,
+                onTap: () => widget.onOpen(_tabOf(Icons.checklist)),
               ),
             ),
+          ),
+          const SizedBox(height: 16),
+
+          // ---- Account ----
+          const SubscriptionBanner(), // free trial / subscribe
+          const BackupCard(),
+
+          // ---- Tools ----
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 24, 0, 0),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.asset('static/image/icon/logo_256.png', width: 64, height: 64),
-                ),
-                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(_greeting(),
-                          style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                      Text('Tools',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w700, letterSpacing: -0.2)),
                       const SizedBox(height: 2),
-                      Text(_date(), style: const TextStyle(color: Colors.white70)),
+                      Text('Long-press a tool to pin it to the bottom bar',
+                          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          // ---- Today ----
-          Row(
-            children: [
-              Expanded(
-                child: _StatCard(
-                  icon: Icons.slow_motion_video,
-                  color: Colors.pink,
-                  value: _reelsToday == null ? '–' : '$_reelsToday',
-                  label: _minutesToday == null ? 'reels today' : 'reels · $_minutesToday min today',
-                  onTap: () => widget.onOpen(_tabOf(Icons.slow_motion_video)),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _StatCard(
-                  icon: Icons.checklist,
-                  color: Colors.green,
-                  value: _tasksTotal == 0 ? '0' : '$_tasksDone/$_tasksTotal',
-                  label: _tasksTotal == 0 ? 'tasks today' : 'tasks done today',
-                  onTap: () => widget.onOpen(_tabOf(Icons.checklist)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const SubscriptionBanner(), // free trial / subscribe
-          const BackupCard(),
-
-          // ---- Features ----
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 12, 0, 0),
-            child: Row(
-              children: [
-                Text('All features', style: Theme.of(context).textTheme.titleMedium),
-                const Spacer(),
                 TextButton.icon(
                   onPressed: _editBar,
                   icon: const Icon(Icons.tune, size: 18),
-                  label: const Text('Edit bottom bar'),
+                  label: const Text('Customize'),
                 ),
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-            child: Text('Tap 📌 on a feature to add it to the bottom bar (up to ${NavPrefs.maxPinned}).',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-          ),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 1.05,
-            children: [
-              for (final f in _pinnedFirst())
-                _FeatureCard(
-                  feature: f,
-                  pinned: widget.pinned.contains(f.tab),
-                  onTap: () => widget.onOpen(f.tab),
-                  onPin: () => _togglePin(f),
-                ),
-            ],
-          ),
+          for (final category in FeatureCategory.values)
+            if (widget.features.any((f) => f.category == category))
+              _CategorySection(
+                label: category.label,
+                features: [for (final f in widget.features) if (f.category == category) f],
+                pinned: widget.pinned,
+                onTap: (f) => widget.onOpen(f.tab),
+                onLongPress: _showFeature,
+              ),
 
           // ---- Share ----
-          const SizedBox(height: 16),
-          Card(
-            color: scheme.primaryContainer,
+          const SizedBox(height: 20),
+          _Panel(
             child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              leading: CircleAvatar(
-                backgroundColor: scheme.primary,
-                child: Icon(Icons.share, color: scheme.onPrimary),
-              ),
-              title: const Text('Share Abhi Utility', style: TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: const Text('Send the app to friends via WhatsApp, Bluetooth, Quick Share…'),
-              trailing: const Icon(Icons.chevron_right),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              leading: _IconBadge(icon: Icons.ios_share, color: scheme.primary),
+              title: const Text('Share Abhi Utility', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Send the app via WhatsApp, Bluetooth or Quick Share'),
+              trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
               onTap: () => AppShare.shareApk(context),
             ),
           ),
           if (_version.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.only(top: 16),
               child: Center(
-                child: Text('Abhi Utility v$_version',
-                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+                child: Text('Abhi Utility · Version $_version',
+                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11, letterSpacing: 0.3)),
               ),
             ),
         ],
@@ -273,56 +264,210 @@ class HomePageState extends State<HomePage> {
     );
   }
 
-  int _tabOf(IconData icon) => widget.features.firstWhere((f) => f.icon == icon).tab;
+  static String? _firstName(AccountUser? user) {
+    final name = user?.name?.trim();
+    if (name == null || name.isEmpty) return null;
+    return name.split(RegExp(r'\s+')).first;
+  }
 
-  /// Features pinned to the bottom bar first (in bar order), then the rest.
-  List<HomeFeature> _pinnedFirst() => [
-        for (final t in widget.pinned) ...widget.features.where((f) => f.tab == t),
-        ...widget.features.where((f) => !widget.pinned.contains(f.tab)),
-      ];
+  int _tabOf(IconData icon) => widget.features.firstWhere((f) => f.icon == icon).tab;
 }
 
-class _StatCard extends StatelessWidget {
-  const _StatCard({
-    required this.icon,
-    required this.color,
-    required this.value,
-    required this.label,
-    required this.onTap,
-  });
+// ---- Building blocks -----------------------------------------------------------------
 
-  final IconData icon;
-  final Color color;
-  final String value;
-  final String label;
-  final VoidCallback onTap;
+/// Flat surface with a hairline border: the base for every Home card.
+class _Panel extends StatelessWidget {
+  const _Panel({required this.child});
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              CircleAvatar(
-                backgroundColor: color.withValues(alpha: 0.15),
-                child: Icon(icon, color: color),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                    Text(label,
-                        maxLines: 2,
-                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-                  ],
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Icon in a softly tinted rounded square.
+class _IconBadge extends StatelessWidget {
+  const _IconBadge({required this.icon, required this.color, this.size = 40});
+  final IconData icon;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(size * 0.3),
+      ),
+      child: Icon(icon, color: color, size: size * 0.55),
+    );
+  }
+}
+
+class _StatData {
+  const _StatData({required this.icon, required this.value, required this.label, required this.onTap, this.progress});
+  final IconData icon;
+  final String value;
+  final String label;
+  final double? progress;
+  final VoidCallback onTap;
+}
+
+/// Brand-coloured header: date, greeting and today's two numbers.
+class _HeroCard extends StatelessWidget {
+  const _HeroCard({
+    required this.date,
+    required this.greeting,
+    required this.name,
+    required this.reels,
+    required this.tasks,
+  });
+
+  final String date;
+  final String greeting;
+  final String? name;
+  final _StatData reels;
+  final _StatData tasks;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [BrandColors.navy, BrandColors.indigo],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Stack(
+          children: [
+            // Soft cyan glow, echoing the logo.
+            Positioned(
+              right: -60,
+              top: -70,
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(colors: [
+                    BrandColors.cyan.withValues(alpha: 0.28),
+                    BrandColors.cyan.withValues(alpha: 0),
+                  ]),
                 ),
               ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(date.toUpperCase(),
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.6),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.2,
+                      )),
+                  const SizedBox(height: 6),
+                  Text(name == null ? greeting : '$greeting, $name',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                      )),
+                  const SizedBox(height: 2),
+                  Text("Here's your day at a glance",
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13)),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(child: _HeroStat(data: reels)),
+                      const SizedBox(width: 10),
+                      Expanded(child: _HeroStat(data: tasks)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroStat extends StatelessWidget {
+  const _HeroStat({required this.data});
+  final _StatData data;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.08),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: data.onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(data.icon, size: 18, color: BrandColors.cyan),
+                  const Spacer(),
+                  Icon(Icons.arrow_outward, size: 14, color: Colors.white.withValues(alpha: 0.45)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(data.value,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  )),
+              const SizedBox(height: 2),
+              Text(data.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12)),
+              if (data.progress != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: data.progress,
+                    minHeight: 4,
+                    color: BrandColors.cyan,
+                    backgroundColor: Colors.white.withValues(alpha: 0.15),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -331,59 +476,172 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _FeatureCard extends StatelessWidget {
-  const _FeatureCard({required this.feature, required this.pinned, required this.onTap, required this.onPin});
-  final HomeFeature feature;
-  final bool pinned;
-  final VoidCallback onTap;
-  final VoidCallback onPin;
+/// A category label and its tools in a 3-column grid.
+class _CategorySection extends StatelessWidget {
+  const _CategorySection({
+    required this.label,
+    required this.features,
+    required this.pinned,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  final String label;
+  final List<HomeFeature> features;
+  final List<int> pinned;
+  final void Function(HomeFeature) onTap;
+  final void Function(HomeFeature) onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+          child: Text(label.toUpperCase(),
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+                color: scheme.onSurfaceVariant,
+              )),
+        ),
+        _Panel(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: GridView.count(
+              crossAxisCount: 3,
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              physics: const NeverScrollableScrollPhysics(),
+              childAspectRatio: 1.2,
+              children: [
+                for (final f in features)
+                  _ToolTile(
+                    feature: f,
+                    pinned: pinned.contains(f.tab),
+                    onTap: () => onTap(f),
+                    onLongPress: () => onLongPress(f),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ToolTile extends StatelessWidget {
+  const _ToolTile({required this.feature, required this.pinned, required this.onTap, required this.onLongPress});
+  final HomeFeature feature;
+  final bool pinned;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      hint: feature.subtitle,
       child: InkWell(
+        borderRadius: BorderRadius.circular(14),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: feature.color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(14),
+                  _IconBadge(icon: feature.icon, color: feature.color, size: 50),
+                  if (pinned)
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: scheme.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: scheme.surfaceContainerLow, width: 2),
+                        ),
+                        child: Icon(Icons.push_pin, size: 10, color: scheme.onPrimary),
+                      ),
                     ),
-                    child: Icon(feature.icon, color: feature.color, size: 28),
-                  ),
-                  const Spacer(),
-                  // Pin to / unpin from the bottom bar.
-                  IconButton(
-                    tooltip: pinned ? 'Remove from bottom bar' : 'Add to bottom bar',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: onPin,
-                    icon: Icon(
-                      pinned ? Icons.push_pin : Icons.push_pin_outlined,
-                      size: 20,
-                      color: pinned ? scheme.primary : scheme.outline,
-                    ),
-                  ),
                 ],
               ),
-              const Spacer(),
-              Text(feature.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              const SizedBox(height: 2),
-              Text(feature.subtitle,
+              const SizedBox(height: 8),
+              Text(feature.title,
+                  textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, height: 1.2)),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Details for one tool, with Open and Pin / Unpin. Pops 'open' or 'pin'.
+class _FeatureSheet extends StatelessWidget {
+  const _FeatureSheet({required this.feature, required this.pinned});
+  final HomeFeature feature;
+  final bool pinned;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                _IconBadge(icon: feature.icon, color: feature.color, size: 52),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(feature.title,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text(feature.subtitle, style: TextStyle(color: scheme.onSurfaceVariant)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(context, 'pin'),
+                    icon: Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined, size: 18),
+                    label: Text(pinned ? 'Unpin from bar' : 'Pin to bar'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(context, 'open'),
+                    child: const Text('Open'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -422,7 +680,8 @@ class _EditBarSheetState extends State<_EditBarSheet> {
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
             child: Row(
               children: [
-                Text('Bottom bar', style: Theme.of(context).textTheme.titleLarge),
+                Text('Customize bottom bar',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
                 const Spacer(),
                 Text('${_checked.length} / ${NavPrefs.maxPinned}',
                     style: TextStyle(color: full ? scheme.primary : scheme.onSurfaceVariant)),
@@ -431,7 +690,7 @@ class _EditBarSheetState extends State<_EditBarSheet> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Text('🏠 Home is always there. Tick features to add them, drag ☰ to change the order.',
+            child: Text('Home is always shown. Select tools to add them and drag to reorder.',
                 style: TextStyle(color: scheme.onSurfaceVariant)),
           ),
           Flexible(
@@ -454,7 +713,7 @@ class _EditBarSheetState extends State<_EditBarSheet> {
                     ),
                     title: Row(
                       children: [
-                        Icon(_order[i].icon, color: _order[i].color),
+                        _IconBadge(icon: _order[i].icon, color: _order[i].color, size: 32),
                         const SizedBox(width: 12),
                         Text(_order[i].title),
                       ],

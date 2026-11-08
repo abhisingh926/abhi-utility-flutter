@@ -32,18 +32,31 @@ class BackupCard extends StatelessWidget {
       valueListenable: ApiClient.instance.user,
       builder: (context, user, _) => Card(
         margin: EdgeInsets.zero,
-        color: user == null ? scheme.tertiaryContainer : scheme.secondaryContainer,
+        elevation: 0,
+        clipBehavior: Clip.antiAlias,
+        color: scheme.surfaceContainerLow,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        ),
         child: ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          leading: Icon(user == null ? Icons.cloud_upload_outlined : Icons.cloud_done_outlined, size: 32),
-          title: Text(user == null ? 'Back up your diary & tasks' : 'Cloud backup'),
-          subtitle: Text(user == null
-              ? 'Login or register to keep them safe, even on a new phone'
-              : 'Logged in as ${user.email}'),
-          trailing: FilledButton.tonal(
-            onPressed: () => AccountPage.open(context),
-            child: Text(user == null ? 'Login' : 'Open'),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: (user == null ? scheme.tertiary : Colors.green).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(user == null ? Icons.cloud_upload_outlined : Icons.cloud_done_outlined,
+                color: user == null ? scheme.tertiary : Colors.green, size: 22),
           ),
+          title: Text(user == null ? 'Back up your diary & tasks' : 'Cloud backup',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: Text(user == null
+              ? 'Log in to keep them safe, even on a new phone'
+              : 'Logged in as ${user.email}'),
+          trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
           onTap: () => AccountPage.open(context),
         ),
       ),

@@ -409,16 +409,33 @@ class SubscriptionBanner extends StatelessWidget {
           subtitle = 'Tap to choose a plan';
           warn = true;
         }
+        final accent = warn ? scheme.error : scheme.primary;
         return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.only(bottom: 10),
           child: Card(
             margin: EdgeInsets.zero,
-            color: warn ? scheme.errorContainer : scheme.tertiaryContainer,
+            elevation: 0,
+            clipBehavior: Clip.antiAlias,
+            color: warn ? scheme.errorContainer.withValues(alpha: 0.5) : scheme.surfaceContainerLow,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(
+                  color: warn ? scheme.error.withValues(alpha: 0.35) : scheme.outlineVariant.withValues(alpha: 0.6)),
+            ),
             child: ListTile(
-              leading: Icon(icon, color: warn ? scheme.onErrorContainer : scheme.onTertiaryContainer),
-              title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: accent, size: 22),
+              ),
+              title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
               subtitle: Text(subtitle),
-              trailing: const Icon(Icons.chevron_right),
+              trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
               onTap: () => api.user.value == null
                   ? AccountPage.open(context, register: true, closeOnLogin: true)
                   : SubscriptionPage.open(context),

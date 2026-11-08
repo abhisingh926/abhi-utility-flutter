@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../account/api_client.dart';
+import '../app_theme.dart';
 import 'ad_block.dart' show siteOf;
 import 'link_history.dart';
 import 'media_finder.dart';
@@ -19,8 +20,8 @@ class QuickDownloadApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.amber, useMaterial3: true),
-      darkTheme: ThemeData(colorSchemeSeed: Colors.amber, useMaterial3: true, brightness: Brightness.dark),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       color: Colors.transparent,
       home: const _QuickPanel(),
     );

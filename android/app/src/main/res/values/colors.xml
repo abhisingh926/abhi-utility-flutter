@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand navy from the app logo: splash background. -->
+    <color name="brand_navy">#0A1033</color>
+</resources>

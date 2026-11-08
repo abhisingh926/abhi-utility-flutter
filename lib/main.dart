@@ -9,6 +9,7 @@ import 'account/subscription_page.dart';
 import 'account/subscription_service.dart';
 import 'account/user_avatar.dart';
 import 'apk/apk_extractor_page.dart';
+import 'app_theme.dart';
 import 'applock/app_lock_page.dart';
 import 'flashlight_page.dart';
 import 'package:pdfrx/pdfrx.dart' show pdfrxFlutterInitialize;
@@ -50,12 +51,8 @@ class AbhiUtilityApp extends StatelessWidget {
     return MaterialApp(
       title: 'Abhi Utility',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.amber, useMaterial3: true),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.amber,
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       home: const HomeShell(),
     );
   }
@@ -86,33 +83,47 @@ class _HomeShellState extends State<HomeShell> {
   /// Every feature: drives both the Home page cards and the bottom bar.
   static const _features = [
     HomeFeature(tab: 1, icon: Icons.flashlight_on_outlined, title: 'Flashlight',
-        subtitle: 'Shake to turn the torch on/off', color: Colors.amber),
+        subtitle: 'Shake to turn the torch on/off', color: Colors.amber,
+        category: FeatureCategory.device),
     HomeFeature(tab: 2, icon: Icons.vpn_key_outlined, title: 'VPN',
-        subtitle: 'Free servers in many countries', color: Colors.teal),
+        subtitle: 'Free servers in many countries', color: Colors.teal,
+        category: FeatureCategory.security),
     HomeFeature(tab: _reelsTab, icon: Icons.slow_motion_video, title: 'Reels',
-        subtitle: 'Count reels & time on social apps', color: Colors.pink),
+        subtitle: 'Count reels & time on social apps', color: Colors.pink,
+        category: FeatureCategory.productivity),
     HomeFeature(tab: _lockTab, icon: Icons.lock_outline, title: 'App Lock',
-        subtitle: 'Limit or lock apps with a password', color: Colors.deepPurple),
+        subtitle: 'Limit or lock apps with a password', color: Colors.deepPurple,
+        category: FeatureCategory.security),
     HomeFeature(tab: _scannerTab, icon: Icons.document_scanner_outlined, title: 'PDF Scanner',
-        subtitle: 'Scan papers or photos into a PDF', color: Colors.orange),
+        subtitle: 'Scan papers or photos into a PDF', color: Colors.orange,
+        category: FeatureCategory.documents),
     HomeFeature(tab: _viewerTab, icon: Icons.picture_as_pdf_outlined, title: 'PDF Viewer',
-        subtitle: 'Open, read, sign & edit PDFs', color: Colors.red),
+        subtitle: 'Open, read, sign & edit PDFs', color: Colors.red,
+        category: FeatureCategory.documents),
     HomeFeature(tab: _tasksTab, icon: Icons.checklist, title: 'Tasks',
-        subtitle: 'Daily to-do list', color: Colors.green),
+        subtitle: 'Daily to-do list', color: Colors.green,
+        category: FeatureCategory.productivity),
     HomeFeature(tab: _diaryTab, icon: Icons.menu_book, title: 'Diary',
-        subtitle: 'Private diary with password', color: Colors.blue),
+        subtitle: 'Private diary with password', color: Colors.blue,
+        category: FeatureCategory.productivity),
     HomeFeature(tab: _downloaderTab, icon: Icons.download_for_offline_outlined, title: 'Downloader',
-        subtitle: 'Save videos & images from links', color: Colors.green),
+        subtitle: 'Save videos & images from links', color: Color(0xFF0097A7),
+        category: FeatureCategory.productivity),
     HomeFeature(tab: _apkTab, icon: Icons.android, title: 'APK Extractor',
-        subtitle: 'Share or save the APK of any app', color: Colors.lightGreen),
+        subtitle: 'Share or save the APK of any app', color: Colors.lightGreen,
+        category: FeatureCategory.device),
     HomeFeature(tab: _zipTab, icon: Icons.folder_zip_outlined, title: 'Zip',
-        subtitle: 'Zip, unzip, view & lock zip files', color: Colors.indigo),
+        subtitle: 'Zip, unzip, view & lock zip files', color: Colors.indigo,
+        category: FeatureCategory.documents),
     HomeFeature(tab: _excelTab, icon: Icons.table_chart_outlined, title: 'Excel Viewer',
-        subtitle: 'View & edit Excel and CSV files', color: Color(0xFF1D6F42)),
+        subtitle: 'View & edit Excel and CSV files', color: Color(0xFF1D6F42),
+        category: FeatureCategory.documents),
     HomeFeature(tab: _sosTab, icon: Icons.sos, title: 'SOS',
-        subtitle: 'Draw S on the lock screen to call for help', color: Colors.red),
+        subtitle: 'Draw S on the lock screen to call for help', color: Colors.red,
+        category: FeatureCategory.security),
     HomeFeature(tab: _docsTab, icon: Icons.description_outlined, title: 'Docs',
-        subtitle: 'View & edit Word documents', color: Color(0xFF2B579A)),
+        subtitle: 'View & edit Word documents', color: Color(0xFF2B579A),
+        category: FeatureCategory.documents),
   ];
 
   final _homeKey = GlobalKey<HomePageState>();

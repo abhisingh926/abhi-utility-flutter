@@ -511,7 +511,12 @@ class MainActivity : FlutterFragmentActivity() {
             val business = call.argument<Boolean>("business") ?: false
             try {
                 when (call.method) {
-                    "hasAccess" -> result.success(StatusSaver.tree(this, business) != null)
+                    "hasAccess" -> result.success(StatusSaver.hasAccess(this, business))
+                    // "All files access" settings page (reading the folder directly, no picker).
+                    "requestAllFiles" -> {
+                        SheetFiles.requestAllFilesAccess(this)
+                        result.success(null)
+                    }
                     // Opens the system folder picker at WhatsApp's status folder.
                     "pick" -> {
                         pendingStatusPick?.success(false)

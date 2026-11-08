@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:two_dimensional_scrollables/two_dimensional_scrollables.dart';
 
 import 'sheet_reader.dart';
@@ -9,8 +11,9 @@ import 'sheet_store.dart';
 import 'sheet_writer.dart';
 
 /// Spreadsheet viewer and editor: frozen column letters and row numbers, sheet
-/// tabs, search, zoom. In edit mode: type into cells (numbers, text, =formulas),
-/// fill empty rows/columns, add sheets, and save back to the file.
+/// tabs, search, zoom. In edit mode: type straight into cells (tap a selected cell or
+/// double-tap) or in the bar on top (numbers, text, =formulas), fill empty rows/columns,
+/// add sheets, and save back to the file — by hand or automatically (Auto-save).
 class SheetViewer extends StatefulWidget {
   const SheetViewer({super.key, required this.file, this.startEditing = false});
   final SheetFile file;
@@ -18,8 +21,11 @@ class SheetViewer extends StatefulWidget {
 
   static Future<void> open(BuildContext context, SheetFile file, {bool remember = true, bool edit = false}) {
     if (remember) sheetStore.addRecent(file);
-    return Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => SheetViewer(file: file, startEditing: edit)));
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SheetViewer(file: file, startEditing: edit),
+      ),
+    );
   }
 
   @override
@@ -40,8 +46,19 @@ class _SheetViewerState extends State<SheetViewer> {
   late bool _editing = widget.startEditing;
   final Map<SheetData, Map<int, String>> _edits = {};
   final _editor = TextEditingController();
-  final _editorFocus = FocusNode();
+  final _editorFocus = FocusNode(); // the bar on top
+  final _cellFocus = FocusNode(); // typing inside the cell
+  (int, int)? _inCell; // cell being typed into in place
   bool _saving = false;
+
+  // ---- Auto-save ----
+  static const _autoSaveKey = 'sheet_autosave';
+  bool _autoSave = false;
+  Timer? _autoSaveTimer;
+  bool _saveAgain = false; // changed while saving: save once more afterwards
+  bool _copyNoticeShown = false;
+
+  bool get _typing => _editorFocus.hasFocus || _cellFocus.hasFocus;
 
   bool get _dirty => _edits.values.any((e) => e.isNotEmpty) || _addedSheet;
   bool _addedSheet = false;
@@ -53,11 +70,55 @@ class _SheetViewerState extends State<SheetViewer> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) {
+      if (mounted) setState(() => _autoSave = p.getBool(_autoSaveKey) ?? false);
+    });
+    // Leaving the cell (keyboard closed, tapped elsewhere): keep what was typed.
+    // Checked a frame later: Enter moves the field to the next cell, which briefly
+    // takes the focus away and gives it back.
+    _cellFocus.addListener(() {
+      if (_cellFocus.hasFocus) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _cellFocus.hasFocus || _inCell == null || _editorFocus.hasFocus) return;
+        final book = _loadedBook;
+        if (book != null) _commit(book.sheets[_sheet.clamp(0, book.sheets.length - 1)], moveDown: false);
+        setState(() => _inCell = null);
+      });
+    });
+  }
+
+  Workbook? _loadedBook;
+
+  Future<void> _setAutoSave(bool on, Workbook book) async {
+    setState(() => _autoSave = on);
+    (await SharedPreferences.getInstance()).setBool(_autoSaveKey, on);
+    _snack(on ? 'Auto-save on: changes are saved a moment after you type them' : 'Auto-save off: tap 💾 to save');
+    if (on && _dirty) _scheduleAutoSave(book);
+  }
+
+  void _scheduleAutoSave(Workbook book) {
+    if (!_autoSave) return;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted || !_dirty) return;
+      if (_saving) {
+        _saveAgain = true;
+      } else {
+        _save(book, quiet: true);
+      }
+    });
+  }
+
+  @override
   void dispose() {
+    _autoSaveTimer?.cancel();
     _vertical.dispose();
     _horizontal.dispose();
     _editor.dispose();
     _editorFocus.dispose();
+    _cellFocus.dispose();
     super.dispose();
   }
 
@@ -87,12 +148,23 @@ class _SheetViewerState extends State<SheetViewer> {
     if (_horizontal.hasClients) _horizontal.jumpTo(0);
   }
 
-  void _select(SheetData s, int row, int col, {bool focus = false}) {
-    setState(() => _selected = (row, col));
+  void _select(SheetData s, int row, int col, {bool focus = false, bool inCell = false}) {
+    setState(() {
+      _selected = (row, col);
+      _inCell = _editing && inCell ? (row, col) : null;
+    });
     if (_editing) {
       _editor.text = editText(s, row, col);
       _editor.selection = TextSelection.collapsed(offset: _editor.text.length);
-      if (focus) _editorFocus.requestFocus();
+      if (inCell) {
+        // The field is built in the cell on the next frame.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _cellFocus.requestFocus();
+          _scrollIntoView(s, row, col);
+        });
+      } else if (focus) {
+        _editorFocus.requestFocus();
+      }
     }
   }
 
@@ -106,9 +178,12 @@ class _SheetViewerState extends State<SheetViewer> {
         setCell(s, sel.$1, sel.$2, value, csv: _isCsv);
         (_edits[s] ??= {})[SheetData.key(sel.$1, sel.$2)] = value;
       });
+      final book = _loadedBook;
+      if (book != null) _scheduleAutoSave(book);
     }
     if (moveDown) {
-      _select(s, sel.$1 + 1, sel.$2, focus: true);
+      final wasInCell = _inCell != null;
+      _select(s, sel.$1 + 1, sel.$2, focus: true, inCell: wasInCell);
       _scrollIntoView(s, sel.$1 + 1, sel.$2);
     }
   }
@@ -179,54 +254,86 @@ class _SheetViewerState extends State<SheetViewer> {
       _snack('A sheet called "$clean" already exists');
       return;
     }
-    final sheet = SheetData(name: clean.length > 31 ? clean.substring(0, 31) : clean, cells: {}, rowCount: 0, colCount: 0);
+    final sheet = SheetData(
+      name: clean.length > 31 ? clean.substring(0, 31) : clean,
+      cells: {},
+      rowCount: 0,
+      colCount: 0,
+    );
     setState(() {
       book.sheets.add(sheet);
       _addedSheet = true;
     });
     _selectSheet(book.sheets.length - 1);
+    _scheduleAutoSave(book);
   }
 
   void _snack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 4)));
 
   /// Writes the edits into the file (over the original when allowed, else a copy).
-  Future<bool> _save(Workbook book) async {
-    final sheet = book.sheets[_sheet];
-    if (_editorFocus.hasFocus) _commit(sheet, moveDown: false);
+  ///
+  /// [quiet] (auto-save): no "Saved" message and no reload, so typing carries on
+  /// undisturbed; only the edits that were written are marked as saved.
+  Future<bool> _save(Workbook book, {bool quiet = false}) async {
+    final sheet = book.sheets[_sheet.clamp(0, book.sheets.length - 1)];
+    if (!quiet && _typing) _commit(sheet, moveDown: false);
     if (!_dirty || _bytes == null) return true;
+    _autoSaveTimer?.cancel();
     setState(() => _saving = true);
     try {
       final original = _bytes!;
       final edits = {for (final e in _edits.entries) e.key: Map<int, String>.of(e.value)};
+      final addedSheet = _addedSheet;
       final bytes = book.isCsv
           ? saveCsv(book.sheets.first, book.csvSeparator!)
           : await saveXlsxInBackground(original, book, edits);
       final (file, copied) = await sheetStore.save(_file, bytes);
-      final reloaded = await readWorkbook(bytes, file.name);
+      final reloaded = quiet ? null : await readWorkbook(bytes, file.name);
       if (!mounted) return true;
       setState(() {
         _file = file;
         _bytes = bytes;
-        _edits.clear();
-        _addedSheet = false;
-        _book = Future.value(reloaded);
-        _sheet = _sheet.clamp(0, reloaded.sheets.length - 1);
+        // Keep edits made while this save was running.
+        for (final e in edits.entries) {
+          final now = _edits[e.key];
+          if (now == null) continue;
+          e.value.forEach((k, v) {
+            if (now[k] == v) now.remove(k);
+          });
+          if (now.isEmpty) _edits.remove(e.key);
+        }
+        if (addedSheet) _addedSheet = false;
+        if (reloaded != null) {
+          _book = Future.value(reloaded);
+          _sheet = _sheet.clamp(0, reloaded.sheets.length - 1);
+        }
       });
-      _snack(copied
-          ? 'Saved as a copy in Downloads/AbhiUtility: ${file.name} (the original can\'t be changed)'
-          : '✅ Saved');
+      if (copied && !(quiet && _copyNoticeShown)) {
+        _copyNoticeShown = true;
+        _snack('Saved as a copy in Downloads/AbhiUtility: ${file.name} (the original can\'t be changed)');
+      } else if (!quiet) {
+        _snack('✅ Saved');
+      }
       return true;
     } catch (e) {
       if (mounted) _snack('Could not save: $e');
       return false;
     } finally {
       if (mounted) setState(() => _saving = false);
+      if (mounted && _saveAgain) {
+        _saveAgain = false;
+        _scheduleAutoSave(book);
+      }
     }
   }
 
   /// Back with unsaved changes: save, discard or stay.
   Future<void> _confirmLeave(Workbook? book) async {
+    if (_autoSave && book != null) {
+      if (await _save(book, quiet: true) && mounted) Navigator.of(context).pop();
+      return;
+    }
     final choice = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -250,6 +357,7 @@ class _SheetViewerState extends State<SheetViewer> {
       future: _book,
       builder: (context, snap) {
         final book = snap.data;
+        _loadedBook = book;
         _isCsv = book?.isCsv ?? false;
         final sheet = book == null ? null : book.sheets[_sheet.clamp(0, book.sheets.length - 1)];
         return PopScope(
@@ -264,7 +372,14 @@ class _SheetViewerState extends State<SheetViewer> {
                 children: [
                   Text(_file.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                   if (sheet != null && (book!.sheets.length > 1 || _editing))
-                    Text('${sheet.name}${_dirty ? ' · not saved' : ''}', style: Theme.of(context).textTheme.bodySmall),
+                    Text(
+                      '${sheet.name}${_saving && _autoSave
+                          ? ' · saving…'
+                          : _dirty
+                          ? (_autoSave ? ' · saving…' : ' · not saved')
+                          : (_autoSave && _editing ? ' · auto-saved' : '')}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                 ],
               ),
               actions: [
@@ -273,7 +388,8 @@ class _SheetViewerState extends State<SheetViewer> {
                     _saving
                         ? const Padding(
                             padding: EdgeInsets.all(14),
-                            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
+                            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                          )
                         : IconButton(
                             tooltip: 'Save',
                             icon: const Icon(Icons.save_outlined),
@@ -287,7 +403,11 @@ class _SheetViewerState extends State<SheetViewer> {
                       if (_editing && sheet != null && _selected != null) {
                         _editor.text = editText(sheet, _selected!.$1, _selected!.$2);
                       }
-                      if (!_editing) _editorFocus.unfocus();
+                      if (!_editing) {
+                        _editorFocus.unfocus();
+                        _cellFocus.unfocus();
+                        _inCell = null;
+                      }
                     }),
                   ),
                   PopupMenuButton<String>(
@@ -295,12 +415,23 @@ class _SheetViewerState extends State<SheetViewer> {
                       'search' => _search(book),
                       'zoom_in' => setState(() => _zoom = math.min(2, _zoom + 0.2)),
                       'zoom_out' => setState(() => _zoom = math.max(0.6, _zoom - 0.2)),
+                      'autosave' => _setAutoSave(!_autoSave, book),
                       _ => null,
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'search', child: ListTile(leading: Icon(Icons.search), title: Text('Search'))),
-                      PopupMenuItem(value: 'zoom_in', child: ListTile(leading: Icon(Icons.zoom_in), title: Text('Bigger'))),
-                      PopupMenuItem(value: 'zoom_out', child: ListTile(leading: Icon(Icons.zoom_out), title: Text('Smaller'))),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'search',
+                        child: ListTile(leading: Icon(Icons.search), title: Text('Search')),
+                      ),
+                      const PopupMenuItem(
+                        value: 'zoom_in',
+                        child: ListTile(leading: Icon(Icons.zoom_in), title: Text('Bigger')),
+                      ),
+                      const PopupMenuItem(
+                        value: 'zoom_out',
+                        child: ListTile(leading: Icon(Icons.zoom_out), title: Text('Smaller')),
+                      ),
+                      CheckedPopupMenuItem(value: 'autosave', checked: _autoSave, child: const Text('Auto-save')),
                     ],
                   ),
                 ],
@@ -308,31 +439,33 @@ class _SheetViewerState extends State<SheetViewer> {
             ),
             body: switch (snap.connectionState) {
               ConnectionState.done when snap.hasError => _Message(
-                  icon: Icons.error_outline,
-                  text: snap.error is SheetFormatException
-                      ? snap.error.toString()
-                      : 'Could not open this file.\n${snap.error}',
-                ),
-              ConnectionState.done => sheet!.isEmpty && !_editing
-                  ? _Message(
-                      icon: Icons.grid_off,
-                      text: 'This sheet is empty',
-                      action: FilledButton.icon(
-                        onPressed: () => setState(() => _editing = true),
-                        icon: const Icon(Icons.edit_outlined),
-                        label: const Text('Start typing'),
+                icon: Icons.error_outline,
+                text: snap.error is SheetFormatException
+                    ? snap.error.toString()
+                    : 'Could not open this file.\n${snap.error}',
+              ),
+              ConnectionState.done =>
+                sheet!.isEmpty && !_editing
+                    ? _Message(
+                        icon: Icons.grid_off,
+                        text: 'This sheet is empty',
+                        action: FilledButton.icon(
+                          onPressed: () => setState(() => _editing = true),
+                          icon: const Icon(Icons.edit_outlined),
+                          label: const Text('Start typing'),
+                        ),
+                      )
+                    : Column(
+                        children: [
+                          _editing ? _editBar(sheet) : _cellBar(sheet),
+                          Expanded(child: _grid(sheet)),
+                        ],
                       ),
-                    )
-                  : Column(
-                      children: [
-                        _editing ? _editBar(sheet) : _cellBar(sheet),
-                        Expanded(child: _grid(sheet)),
-                      ],
-                    ),
               _ => const Center(child: CircularProgressIndicator()),
             },
-            bottomNavigationBar:
-                book != null && (book.sheets.length > 1 || (_editing && !book.isCsv)) ? _sheetTabs(book) : null,
+            bottomNavigationBar: book != null && (book.sheets.length > 1 || (_editing && !book.isCsv))
+                ? _sheetTabs(book)
+                : null,
           ),
         );
       },
@@ -353,8 +486,10 @@ class _SheetViewerState extends State<SheetViewer> {
           children: [
             SizedBox(
               width: 56,
-              child: Text(sel == null ? '' : '${columnName(sel.$2)}${sel.$1 + 1}',
-                  style: TextStyle(fontWeight: FontWeight.bold, color: scheme.primary)),
+              child: Text(
+                sel == null ? '' : '${columnName(sel.$2)}${sel.$1 + 1}',
+                style: TextStyle(fontWeight: FontWeight.bold, color: scheme.primary),
+              ),
             ),
             Expanded(
               child: ConstrainedBox(
@@ -385,8 +520,10 @@ class _SheetViewerState extends State<SheetViewer> {
           children: [
             SizedBox(
               width: 48,
-              child: Text(sel == null ? '–' : '${columnName(sel.$2)}${sel.$1 + 1}',
-                  style: TextStyle(fontWeight: FontWeight.bold, color: scheme.primary)),
+              child: Text(
+                sel == null ? '–' : '${columnName(sel.$2)}${sel.$1 + 1}',
+                style: TextStyle(fontWeight: FontWeight.bold, color: scheme.primary),
+              ),
             ),
             Expanded(
               child: TextField(
@@ -401,7 +538,7 @@ class _SheetViewerState extends State<SheetViewer> {
                   filled: true,
                   fillColor: scheme.surface,
                   border: const OutlineInputBorder(),
-                  hintText: sel == null ? 'Tap a cell, then type here' : 'Number, text or =formula',
+                  hintText: sel == null ? 'Tap a cell, tap it again to type in it' : 'Number, text or =formula',
                 ),
                 onSubmitted: (_) => _commit(s),
               ),
@@ -445,12 +582,14 @@ class _SheetViewerState extends State<SheetViewer> {
     }
 
     Widget header(String text, {bool selected = false}) => ColoredBox(
-          color: selected ? scheme.primaryContainer : headerColor,
-          child: Center(
-            child: Text(text,
-                style: TextStyle(fontSize: _fontSize * 0.9, color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
-          ),
-        );
+      color: selected ? scheme.primaryContainer : headerColor,
+      child: Center(
+        child: Text(
+          text,
+          style: TextStyle(fontSize: _fontSize * 0.9, color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
 
     return TableView.builder(
       verticalDetails: ScrollableDetails.vertical(controller: _vertical),
@@ -484,10 +623,12 @@ class _SheetViewerState extends State<SheetViewer> {
         final content = GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
-            if (_editing && _editorFocus.hasFocus && _selected != null) _commit(s, moveDown: false);
-            _select(s, r, c);
+            if (_inCell == (r, c)) return; // already typing here
+            if (_editing && _typing && _selected != null) _commit(s, moveDown: false);
+            // Like Excel on phones: tap selects, tapping the selected cell starts typing in it.
+            _select(s, r, c, inCell: _editing && isSelected);
           },
-          onDoubleTap: _editing ? () => _select(s, r, c, focus: true) : null,
+          onDoubleTap: _editing ? () => _select(s, r, c, inCell: true) : null,
           child: Container(
             decoration: isSelected
                 ? BoxDecoration(
@@ -495,22 +636,26 @@ class _SheetViewerState extends State<SheetViewer> {
                     border: Border.all(color: scheme.primary, width: 2),
                   )
                 : edited.containsKey(k)
-                    ? BoxDecoration(color: Colors.amber.withValues(alpha: 0.18)) // changed, not saved yet
-                    : null,
+                ? BoxDecoration(color: Colors.amber.withValues(alpha: 0.18)) // changed, not saved yet
+                : null,
             padding: EdgeInsets.symmetric(horizontal: 4 * _zoom),
             alignment: m != null
                 ? Alignment.center
                 : (s.numeric.contains(k) ? Alignment.centerRight : Alignment.centerLeft),
-            child: Text(
-              s.cell(r, c) ?? '',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: _fontSize,
-                fontWeight: s.bold.contains(k) ? FontWeight.bold : null,
-                fontStyle: s.formulas.containsKey(k) && (s.cell(r, c)?.startsWith('=') ?? false) ? FontStyle.italic : null,
-              ),
-            ),
+            child: _inCell == (r, c)
+                ? _cellEditor(s)
+                : Text(
+                    s.cell(r, c) ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: _fontSize,
+                      fontWeight: s.bold.contains(k) ? FontWeight.bold : null,
+                      fontStyle: s.formulas.containsKey(k) && (s.cell(r, c)?.startsWith('=') ?? false)
+                          ? FontStyle.italic
+                          : null,
+                    ),
+                  ),
           ),
         );
         if (m == null) return TableViewCell(child: content);
@@ -524,6 +669,19 @@ class _SheetViewerState extends State<SheetViewer> {
       },
     );
   }
+
+  /// The text field shown inside the cell being typed into (same text as the bar on top).
+  Widget _cellEditor(SheetData s) => TextField(
+    controller: _editor,
+    focusNode: _cellFocus,
+    maxLines: 1,
+    textInputAction: TextInputAction.next,
+    style: TextStyle(fontSize: _fontSize),
+    cursorHeight: _fontSize * 1.2,
+    decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none, contentPadding: EdgeInsets.zero),
+    onSubmitted: (_) => _commit(s), // Enter: save the cell, type into the one below
+    onTapOutside: (_) {}, // tapping another cell commits through its own tap
+  );
 
   Widget _sheetTabs(Workbook book) {
     final canAdd = _editing && !book.isCsv;
@@ -541,11 +699,7 @@ class _SheetViewerState extends State<SheetViewer> {
                   label: const Text('Sheet'),
                   onPressed: () => _addSheet(book),
                 )
-              : ChoiceChip(
-                  label: Text(book.sheets[i].name),
-                  selected: i == _sheet,
-                  onSelected: (_) => _selectSheet(i),
-                ),
+              : ChoiceChip(label: Text(book.sheets[i].name), selected: i == _sheet, onSelected: (_) => _selectSheet(i)),
         ),
       ),
     );
@@ -560,19 +714,19 @@ class _Message extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 56, color: Theme.of(context).colorScheme.onSurfaceVariant),
-              const SizedBox(height: 16),
-              Text(text, textAlign: TextAlign.center),
-              if (action != null) ...[const SizedBox(height: 16), action!],
-            ],
-          ),
-        ),
-      );
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 56, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          const SizedBox(height: 16),
+          Text(text, textAlign: TextAlign.center),
+          if (action != null) ...[const SizedBox(height: 16), action!],
+        ],
+      ),
+    ),
+  );
 }
 
 /// Find text in every sheet; pops with (sheet, row, column) of the chosen match.
@@ -595,7 +749,11 @@ class _SearchSheetState extends State<_SearchSheet> {
     final hits = <(int, int, int, String)>[];
     if (_query.isNotEmpty) {
       // Current sheet first.
-      final order = [widget.currentSheet, for (var i = 0; i < widget.book.sheets.length; i++) if (i != widget.currentSheet) i];
+      final order = [
+        widget.currentSheet,
+        for (var i = 0; i < widget.book.sheets.length; i++)
+          if (i != widget.currentSheet) i,
+      ];
       outer:
       for (final si in order) {
         final s = widget.book.sheets[si];
@@ -629,7 +787,10 @@ class _SearchSheetState extends State<_SearchSheet> {
               child: TextField(
                 autofocus: true,
                 decoration: const InputDecoration(
-                    hintText: 'Find in this file', prefixIcon: Icon(Icons.search), border: OutlineInputBorder()),
+                  hintText: 'Find in this file',
+                  prefixIcon: Icon(Icons.search),
+                  border: OutlineInputBorder(),
+                ),
                 onChanged: _find,
               ),
             ),
@@ -641,8 +802,8 @@ class _SearchSheetState extends State<_SearchSheet> {
                   _query.isEmpty
                       ? ''
                       : _hits.isEmpty
-                          ? 'No matches'
-                          : '${_hits.length}${_hits.length >= _max ? '+' : ''} matches',
+                      ? 'No matches'
+                      : '${_hits.length}${_hits.length >= _max ? '+' : ''} matches',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
