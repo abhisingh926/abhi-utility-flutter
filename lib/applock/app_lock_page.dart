@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../diary/diary_lock.dart';
 import 'pin_pad.dart';
 
 /// App Lock: pick apps and a rule (always locked / daily limit / hourly limit).
@@ -88,6 +89,8 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   /// Password gate: the tab asks for the password before showing or changing locks.
   bool _hasPin = false;
   bool _fingerprint = true;
+  bool _bioAvailable = false;
+  bool _bioPrompted = false; // ask for the fingerprint once each time the tab locks
   bool _unlocked = false;
   List<LockRule> _rules = [];
   List<InstalledApp>? _apps;
@@ -107,7 +110,17 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   }
 
   void relock() {
+    _bioPrompted = false;
     if (_unlocked && mounted) setState(() => _unlocked = false);
+  }
+
+  bool get _useFingerprint => _fingerprint && _bioAvailable;
+
+  Future<void> _unlockWithFingerprint() async {
+    _bioPrompted = true;
+    if (await DiaryLock.authenticate(reason: 'Unlock App Lock') && mounted) {
+      setState(() => _unlocked = true);
+    }
   }
 
   Future<void> refresh() async {
@@ -116,10 +129,12 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       final hasPin = await _channel.invokeMethod<bool>('hasPin') ?? false;
       final raw = await _channel.invokeListMethod<Map>('rules') ?? [];
       final fingerprint = await _channel.invokeMethod<bool>('fingerprintEnabled') ?? true;
+      final bioAvailable = await DiaryLock.biometricAvailable();
       if (!mounted) return;
       setState(() {
         _hasPin = hasPin;
         _fingerprint = fingerprint;
+        _bioAvailable = bioAvailable;
         _serviceEnabled = enabled;
         _rules = raw.map(LockRule.fromMap).toList()..sort((a, b) => a.label.compareTo(b.label));
         _loading = false;
@@ -261,15 +276,37 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     }
     // 2. Ask for it before showing or changing locks.
     if (!_unlocked) {
-      return PinPad(
-        title: 'App Lock is password protected',
-        subtitle: 'Enter the password to see or change locks',
-        onSubmit: (pin) async {
-          final ok = await _channel.invokeMethod<bool>('checkPin', {'pin': pin}) ?? false;
-          if (!ok) return 'Wrong password';
-          setState(() => _unlocked = true);
-          return null;
-        },
+      // Same as the diary: ask for the fingerprint straight away, password as fallback.
+      if (_useFingerprint && !_bioPrompted) {
+        _bioPrompted = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _unlockWithFingerprint());
+      }
+      return Column(
+        children: [
+          Expanded(
+            child: PinPad(
+              title: 'App Lock is password protected',
+              subtitle: _useFingerprint
+                  ? 'Use your fingerprint or the password to see or change locks'
+                  : 'Enter the password to see or change locks',
+              onSubmit: (pin) async {
+                final ok = await _channel.invokeMethod<bool>('checkPin', {'pin': pin}) ?? false;
+                if (!ok) return 'Wrong password';
+                setState(() => _unlocked = true);
+                return null;
+              },
+            ),
+          ),
+          if (_useFingerprint)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: OutlinedButton.icon(
+                onPressed: _unlockWithFingerprint,
+                icon: const Icon(Icons.fingerprint, size: 28),
+                label: const Text('Use fingerprint'),
+              ),
+            ),
+        ],
       );
     }
 
@@ -290,7 +327,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
                 Icon(Icons.lock_open, size: 18, color: scheme.primary),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text('Unlocked with password',
+                  child: Text('Unlocked',
                       style: TextStyle(color: scheme.onSurfaceVariant)),
                 ),
                 TextButton(onPressed: _changePassword, child: const Text('Change password')),
@@ -340,8 +377,8 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
             Card(
               child: SwitchListTile(
                 secondary: const CircleAvatar(child: Icon(Icons.fingerprint)),
-                title: const Text('Fingerprint for extra time'),
-                subtitle: const Text('Use your fingerprint instead of the password when a locked app asks'),
+                title: const Text('Fingerprint unlock'),
+                subtitle: const Text('Use your fingerprint instead of the password here and when a locked app asks for more time'),
                 value: _fingerprint,
                 onChanged: (on) async {
                   setState(() => _fingerprint = on);

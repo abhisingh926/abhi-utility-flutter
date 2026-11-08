@@ -70,10 +70,10 @@ class DiaryLock {
       (await SharedPreferences.getInstance()).setBool(_bioKey, on);
 
   /// Shows the fingerprint prompt. Returns true when the user was recognised.
-  static Future<bool> authenticate() async {
+  static Future<bool> authenticate({String reason = 'Unlock your diary'}) async {
     try {
       return await _auth.authenticate(
-        localizedReason: 'Unlock your diary',
+        localizedReason: reason,
         biometricOnly: true, // the diary password is the fallback, not the phone PIN
       );
     } catch (_) {

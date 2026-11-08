@@ -92,6 +92,21 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/reel_counter_config" />
         </service>
+        <!-- Uninstall protection (App Lock → "Uninstall protection"): an active device
+             admin can't be uninstalled. No policies are used. -->
+        <receiver
+            android:name=".UninstallProtectionAdmin"
+            android:exported="true"
+            android:label="@string/uninstall_protection_label"
+            android:description="@string/uninstall_protection_description"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

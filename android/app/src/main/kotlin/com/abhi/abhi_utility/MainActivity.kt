@@ -138,6 +138,26 @@ class MainActivity : FlutterFragmentActivity() {
                     pkgs.forEach { AppLock.setRule(this, it, rule) }
                     result.success(null)
                 }
+                // ---- Uninstall protection ----
+                "protectionStatus" -> result.success(protectionStatus())
+                "enableProtection" -> {
+                    if (!UninstallProtection.hasAnyPassword(this)) {
+                        result.error("NO_PIN", "Set the App Lock password first", null)
+                    } else if (UninstallProtection.isAdminActive(this)) {
+                        UninstallProtection.setOn(this, true)
+                        result.success(protectionStatus())
+                    } else {
+                        // Android asks "Activate device admin app?"; answer in onActivityResult.
+                        pendingProtection?.success(protectionStatus())
+                        pendingProtection = result
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(UninstallProtection.activateIntent(this), REQUEST_DEVICE_ADMIN)
+                    }
+                }
+                "disableProtection" -> {
+                    UninstallProtection.turnOff(this)
+                    result.success(protectionStatus())
+                }
                 "hasPin" -> result.success(AppLock.hasPin(this))
                 "fingerprintEnabled" -> result.success(AppLock.fingerprintEnabled(this))
                 "setFingerprintEnabled" -> {
@@ -346,6 +366,16 @@ class MainActivity : FlutterFragmentActivity() {
         return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
     }
 
+    private var pendingProtection: MethodChannel.Result? = null
+
+    /** on: switched on; admin: Android blocks uninstalling; guard: the screen guard can run. */
+    private fun protectionStatus(): Map<String, Boolean> = mapOf(
+        "on" to UninstallProtection.isOn(this),
+        "admin" to UninstallProtection.isAdminActive(this),
+        "guard" to isReelServiceEnabled(),
+        "hasPassword" to UninstallProtection.hasAnyPassword(this),
+    )
+
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -369,6 +399,13 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_DEVICE_ADMIN) {
+            // Only switch on if the parent pressed "Activate".
+            if (UninstallProtection.isAdminActive(this)) UninstallProtection.setOn(this, true)
+            pendingProtection?.success(protectionStatus())
+            pendingProtection = null
+            return
+        }
         if (requestCode != StatusSaver.REQUEST_CODE) return
         val result = pendingStatusPick ?: return
         pendingStatusPick = null
@@ -388,6 +425,8 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         /** Extra set by the floating ⬇ button: open the Downloader. */
         const val EXTRA_OPEN = "open"
+
+        private const val REQUEST_DEVICE_ADMIN = 4711
     }
 
     /** {action: "share", text} for "Share → Abhi Utility", {action: "bubble"} for the ⬇ button, else null. */

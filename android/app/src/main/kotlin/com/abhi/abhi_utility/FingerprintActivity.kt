@@ -17,6 +17,8 @@ class FingerprintActivity : Activity() {
     companion object {
         const val EXTRA_PKG = "pkg"
         const val EXTRA_APP_NAME = "appName"
+        /** Optional prompt subtitle (default: "Give <app> more time"). */
+        const val EXTRA_SUBTITLE = "subtitle"
     }
 
     private var pkg = ""
@@ -31,7 +33,7 @@ class FingerprintActivity : Activity() {
 
         val builder = BiometricPrompt.Builder(this)
             .setTitle("Unlock with fingerprint")
-            .setSubtitle("Give $name more time")
+            .setSubtitle(intent.getStringExtra(EXTRA_SUBTITLE) ?: "Give $name more time")
             .setNegativeButton("Use password", mainExecutor) { _, _ -> finishWith(false) }
         if (Build.VERSION.SDK_INT >= 30) {
             builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
