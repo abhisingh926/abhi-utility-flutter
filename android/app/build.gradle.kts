@@ -89,6 +89,13 @@ flutter {
 dependencies {
     // Zip tool: password-protected (AES-256) zips.
     implementation("net.lingala.zip4j:zip4j:2.11.5")
+    // SOS: record video + sound over the lock screen when no contact answers.
+    val camerax = "1.4.2"
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-video:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
+    implementation("androidx.activity:activity:1.9.3")
 }
 
 // Fail release builds clearly instead of producing an unsigned / debug-signed app.

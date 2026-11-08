@@ -27,6 +27,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.CallLog
+import android.telephony.SmsManager
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
@@ -92,6 +93,100 @@ object Sos {
     }
 
     fun contactMaps(c: Context) = contacts(c).map { mapOf("name" to it.name, "number" to it.number) }
+
+    // ---- When no one answers ------------------------------------------------------------
+
+    private const val KEY_SMS_LOCATION = "smsLocation"
+    private const val KEY_RECORD = "record"
+    private const val KEY_UPLOAD_KEY = "uploadKey"
+    private const val KEY_UPLOAD_URL = "uploadBaseUrl"
+    private const val KEY_UPLOAD_USER = "uploadUserId"
+    private const val KEY_SENDER_NAME = "senderName"
+
+    /** How long the video (with sound) is recorded. */
+    const val RECORD_SECONDS = 30
+
+    /** Text the current location to every SOS contact. */
+    val LOCATION_SMS_PERMISSIONS = arrayOf(
+        Manifest.permission.SEND_SMS,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+    )
+
+    /** Record video + sound (the link is texted, so SMS too). */
+    val RECORD_PERMISSIONS = arrayOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.SEND_SMS,
+    )
+
+    fun smsLocation(c: Context) = prefs(c).getBoolean(KEY_SMS_LOCATION, false)
+    fun record(c: Context) = prefs(c).getBoolean(KEY_RECORD, false)
+
+    fun setNoAnswer(c: Context, smsLocation: Boolean, record: Boolean) =
+        prefs(c).edit().putBoolean(KEY_SMS_LOCATION, smsLocation).putBoolean(KEY_RECORD, record).apply()
+
+    fun missing(c: Context, perms: Array<String>) =
+        perms.filter { c.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+
+    fun has(c: Context, perm: String) = c.checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+
+    /** Server upload of the recording (SOS key from the logged-in account). */
+    data class Upload(val key: String, val baseUrl: String, val userId: Int)
+
+    fun upload(c: Context): Upload? {
+        val p = prefs(c)
+        val key = p.getString(KEY_UPLOAD_KEY, null) ?: return null
+        val url = p.getString(KEY_UPLOAD_URL, null) ?: return null
+        return Upload(key, url, p.getInt(KEY_UPLOAD_USER, 0))
+    }
+
+    fun setUpload(c: Context, upload: Upload?, senderName: String?) {
+        val e = prefs(c).edit()
+        if (upload == null) {
+            e.remove(KEY_UPLOAD_KEY).remove(KEY_UPLOAD_URL).remove(KEY_UPLOAD_USER).remove(KEY_SENDER_NAME)
+        } else {
+            e.putString(KEY_UPLOAD_KEY, upload.key).putString(KEY_UPLOAD_URL, upload.baseUrl.trimEnd('/'))
+                .putInt(KEY_UPLOAD_USER, upload.userId).putString(KEY_SENDER_NAME, senderName ?: "")
+        }
+        e.apply()
+    }
+
+    fun senderName(c: Context) = prefs(c).getString(KEY_SENDER_NAME, "")?.trim().orEmpty()
+
+    /** Something to do after no one answered (and the permissions for it). */
+    fun wantsNoAnswerHelp(c: Context) =
+        (smsLocation(c) && has(c, Manifest.permission.SEND_SMS)) ||
+            (record(c) && has(c, Manifest.permission.CAMERA) && upload(c) != null)
+
+    /** Texts [text] to every SOS contact. Returns how many messages were handed to the phone. */
+    fun smsAll(c: Context, text: String): Int {
+        if (!has(c, Manifest.permission.SEND_SMS)) return 0
+        val sms = if (Build.VERSION.SDK_INT >= 31) {
+            c.getSystemService(SmsManager::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            SmsManager.getDefault()
+        } ?: return 0
+        var sent = 0
+        for (contact in contacts(c)) {
+            try {
+                val parts = sms.divideMessage(text)
+                if (parts.size > 1) sms.sendMultipartTextMessage(contact.number, null, parts, null, null)
+                else sms.sendTextMessage(contact.number, null, text, null, null)
+                sent++
+            } catch (e: Exception) {
+                Log.w("Sos", "Could not text ${contact.number}", e)
+            }
+        }
+        return sent
+    }
+
+    /** "SOS! Asha needs help." / "SOS! I need help." */
+    fun smsOpening(c: Context): String {
+        val name = senderName(c)
+        return if (name.isEmpty()) "SOS! I need help." else "SOS! $name needs help."
+    }
 
     fun missingPermissions(c: Context) =
         PERMISSIONS.filter { c.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
@@ -367,8 +462,14 @@ class SosController(private val service: AccessibilityService) {
     private fun callNext() {
         handler.removeCallbacks(noCallTimeout)
         if (next >= queue.size * ROUNDS) {
-            notify("SOS: no one answered", "Called every SOS contact $ROUNDS times.", ongoing = false)
+            val help = Sos.wantsNoAnswerHelp(service)
+            notify(
+                "SOS: no one answered",
+                if (help) "Sending your location and recording to your SOS contacts." else "Called every SOS contact $ROUNDS times.",
+                ongoing = false
+            )
             finish()
+            if (help) SosRecordActivity.start(service)
             return
         }
         val c = queue[next % queue.size]

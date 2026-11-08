@@ -1,6 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../account/api_client.dart';
+import '../account/profile_page.dart';
 import '../applock/accessibility_disclosure.dart';
+
+const _sosChannel = MethodChannel('abhi_utility/sos');
+
+/// Gives the native SOS code an upload key for the logged-in account, when the SOS
+/// recording is on and the key is missing or belongs to another account. Called
+/// when the SOS page opens and whenever the account changes.
+Future<bool> syncSosUploadKey({bool force = false}) async {
+  try {
+    final s = await _sosChannel.invokeMapMethod<String, dynamic>('status');
+    if (s == null || s['record'] != true) return true;
+    final api = ApiClient.instance;
+    await api.load();
+    final user = api.user.value;
+    if (user == null || !api.isLoggedIn) {
+      await _sosChannel.invokeMethod('setUpload', <String, dynamic>{});
+      return false;
+    }
+    if (!force && s['uploadUserId'] == user.id) return true;
+    final j = await api.json('POST', '/api/v1/sos/key');
+    await _sosChannel.invokeMethod('setUpload', {
+      'key': j['key'],
+      'baseUrl': ApiClient.baseUrl,
+      'userId': user.id,
+      'name': user.name ?? '',
+    });
+    return true;
+  } catch (_) {
+    return false; // offline: tried again next time
+  }
+}
 
 /// SOS: draw an "S" on the lock screen and the SOS contacts are called one after
 /// another until someone answers. Runs natively (Sos.kt, in ReelCounterService).
@@ -33,6 +65,11 @@ class SosPageState extends State<SosPage> {
   bool _service = false;
   bool _active = false;
   bool _drawing = false; // finger on the practice pad: don't scroll
+  bool _smsLocation = false;
+  bool _record = false;
+  bool _smsPermissions = false;
+  bool _recordPermissions = false;
+  int? _uploadUserId;
   List<SosContact> _contacts = [];
   late final AppLifecycleListener _lifecycle;
 
@@ -50,7 +87,10 @@ class SosPageState extends State<SosPage> {
     super.dispose();
   }
 
-  Future<void> refresh() async => _apply(await _channel.invokeMapMethod<String, dynamic>('status'));
+  Future<void> refresh() async {
+    _apply(await _channel.invokeMapMethod<String, dynamic>('status'));
+    if (_record && await syncSosUploadKey()) _apply(await _channel.invokeMapMethod<String, dynamic>('status'));
+  }
 
   void _apply(Map<String, dynamic>? s) {
     if (s == null || !mounted) return;
@@ -61,7 +101,41 @@ class SosPageState extends State<SosPage> {
       _service = s['service'] as bool;
       _active = s['active'] as bool;
       _contacts = [for (final m in (s['contacts'] as List)) SosContact.fromMap(m as Map)];
+      _smsLocation = s['smsLocation'] as bool? ?? false;
+      _record = s['record'] as bool? ?? false;
+      _smsPermissions = s['smsLocationPermissions'] as bool? ?? false;
+      _recordPermissions = s['recordPermissions'] as bool? ?? false;
+      _uploadUserId = s['uploadUserId'] as int?;
     });
+  }
+
+  /// "If no one answers" switches. The recording needs a login (it is uploaded).
+  Future<void> _setNoAnswer({bool? sms, bool? record}) async {
+    final wantRecord = record ?? _record;
+    if (record == true) {
+      final api = ApiClient.instance;
+      if (!api.isLoggedIn) {
+        _snack('Log in first: the recording is uploaded to your account so your contacts can open the link.',
+            action: SnackBarAction(label: 'Log in', onPressed: () => ProfilePage.open(context)));
+        return;
+      }
+    }
+    _apply(await _channel.invokeMapMethod<String, dynamic>(
+        'setNoAnswer', {'smsLocation': sms ?? _smsLocation, 'record': wantRecord}));
+    if (record == true && !await syncSosUploadKey(force: true)) {
+      _snack('Could not reach the server to set up uploads. Check your internet and try again.');
+      _apply(await _channel.invokeMapMethod<String, dynamic>('setNoAnswer', {'smsLocation': _smsLocation, 'record': false}));
+      return;
+    }
+    if (record == false) await _channel.invokeMethod('setUpload', <String, dynamic>{});
+    await refresh();
+    final missing = (_smsLocation && !_smsPermissions) || (_record && !_recordPermissions);
+    if (missing && mounted) {
+      _snack('Allow SMS, location, camera and microphone so this works.', action: SnackBarAction(
+        label: 'Settings',
+        onPressed: () => _channel.invokeMethod('openAppSettings'),
+      ));
+    }
   }
 
   Future<void> _setOn(bool on) async {
@@ -283,6 +357,60 @@ class SosPageState extends State<SosPage> {
               ),
             ],
           ),
+
+          // ---- If no one answers ----
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 20, 4, 4),
+            child: Text('If no one answers', style: Theme.of(context).textTheme.titleMedium),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(
+                'After every contact has been called twice without an answer. '
+                'SMS are sent from your SIM (normal SMS charges).',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+          ),
+          Card(
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.location_on_outlined),
+                  title: const Text('Text my location'),
+                  subtitle: const Text('Sends a Google Maps link of where you are to every SOS contact.'),
+                  value: _smsLocation,
+                  onChanged: (v) => _setNoAnswer(sms: v),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.videocam_outlined),
+                  title: const Text('Record 30 s of video and sound'),
+                  subtitle: const Text(
+                      'Records with the back camera over the lock screen, uploads it to your account and '
+                      'texts the private link to your SOS contacts. Links expire after 30 days.'),
+                  value: _record,
+                  onChanged: (v) => _setNoAnswer(record: v),
+                ),
+              ],
+            ),
+          ),
+          if ((_smsLocation && !_smsPermissions) || (_record && !_recordPermissions))
+            _Warning(
+              text: 'Allow SMS, location${_record ? ', camera and microphone' : ''} for this to work.',
+              button: 'Allow',
+              onPressed: () => _setNoAnswer(),
+            ),
+          if (_record && ApiClient.instance.user.value != null && _uploadUserId != ApiClient.instance.user.value!.id)
+            _Warning(
+              text: 'Uploads are not set up for this account yet (no internet?).',
+              button: 'Retry',
+              onPressed: () => _setNoAnswer(record: true),
+            ),
+          if (_record && ApiClient.instance.user.value == null)
+            _Warning(
+              text: 'You are logged out, so the recording can\'t be uploaded. Log in to turn it back on.',
+              button: 'Log in',
+              onPressed: () => ProfilePage.open(context),
+            ),
 
           // ---- Practice ----
           Padding(

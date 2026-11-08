@@ -325,6 +325,10 @@ class ApiClient {
     _refresh = null;
     user.value = null;
     entitlement.value = null;
+    // The SOS upload key belonged to this account: the next one gets its own.
+    try {
+      await const MethodChannel('abhi_utility/sos').invokeMethod('setUpload', <String, dynamic>{});
+    } catch (_) {/* not on Android / tests */}
   }
 
   // ---- Auth -------------------------------------------------------------------------

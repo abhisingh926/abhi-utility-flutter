@@ -24,6 +24,16 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.READ_CALL_LOG"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- SOS, when no contact answered (each only if the user turns it on in SOS):
+         text the location, record video + sound and text its link. -->
+    <uses-permission android:name="android.permission.SEND_SMS"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <uses-feature android:name="android.hardware.telephony" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.flash" android:required="false"/>
     <application
@@ -95,6 +105,19 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout"/>
+        <!-- SOS when no contact answered: over the lock screen, gets the location and
+             records video + sound (an app on screen may use them; a background one may not). -->
+        <activity
+            android:name=".SosRecordActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
+            android:taskAffinity="com.abhi.abhi_utility.sos"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode"/>
         <!-- Quick download panel over the current app (⬇ button / "Share → Abhi Utility"). -->
         <activity
             android:name=".QuickDownloadActivity"

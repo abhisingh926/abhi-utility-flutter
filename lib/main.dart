@@ -147,7 +147,10 @@ class _HomeShellState extends State<HomeShell> {
     BackupService.syncIfPending();
     _loadPinned();
     // Saved login + trial status first (works offline), then the latest from the server.
-    ApiClient.instance.load().then((_) => _refreshAccount());
+    ApiClient.instance.load().then((_) async {
+      await _refreshAccount();
+      await syncSosUploadKey(); // SOS recording on: make sure uploads go to this account
+    });
     SubscriptionService.instance.init(); // catches Play purchases that finish later
     // Leaving the app locks App Lock + Diary (not for the photo picker / our own system screens).
     _lifecycle = AppLifecycleListener(
@@ -275,6 +278,7 @@ class _HomeShellState extends State<HomeShell> {
     if (id == _userId) return;
     _userId = id;
     _onRestored();
+    syncSosUploadKey(); // SOS recordings upload to the account now logged in
   }
 
   @override

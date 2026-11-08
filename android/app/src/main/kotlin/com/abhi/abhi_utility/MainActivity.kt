@@ -252,6 +252,35 @@ class MainActivity : FlutterFragmentActivity() {
                     ReelCounterService.instance?.sos?.stop()
                     result.success(null)
                 }
+                // No one answered: text the location / record video + sound (asks for what's missing).
+                "setNoAnswer" -> {
+                    val sms = call.argument<Boolean>("smsLocation") ?: false
+                    val record = call.argument<Boolean>("record") ?: false
+                    Sos.setNoAnswer(this, sms, record)
+                    val missing = buildSet {
+                        if (sms) addAll(Sos.missing(this@MainActivity, Sos.LOCATION_SMS_PERMISSIONS))
+                        if (record) addAll(Sos.missing(this@MainActivity, Sos.RECORD_PERMISSIONS))
+                    }
+                    if (missing.isEmpty()) {
+                        result.success(sosStatus())
+                    } else {
+                        pendingSosPermissions?.success(sosStatus())
+                        pendingSosPermissions = result
+                        requestPermissions(missing.toTypedArray(), REQUEST_SOS_PERMISSIONS)
+                    }
+                }
+                // SOS key of the logged-in account for uploading recordings; no key = clear.
+                "setUpload" -> {
+                    val key = call.argument<String>("key")
+                    val url = call.argument<String>("baseUrl")
+                    Sos.setUpload(
+                        this,
+                        if (key.isNullOrEmpty() || url.isNullOrEmpty()) null
+                        else Sos.Upload(key, url, call.argument<Int>("userId") ?: 0),
+                        call.argument<String>("name"),
+                    )
+                    result.success(sosStatus())
+                }
                 else -> result.notImplemented()
             }
         }
@@ -558,6 +587,11 @@ class MainActivity : FlutterFragmentActivity() {
         "permissions" to Sos.missingPermissions(this).isEmpty(),
         "service" to isReelServiceEnabled(),
         "active" to (ReelCounterService.instance?.sos?.isActive ?: false),
+        "smsLocation" to Sos.smsLocation(this),
+        "record" to Sos.record(this),
+        "smsLocationPermissions" to Sos.missing(this, Sos.LOCATION_SMS_PERMISSIONS).isEmpty(),
+        "recordPermissions" to Sos.missing(this, Sos.RECORD_PERMISSIONS).isEmpty(),
+        "uploadUserId" to Sos.upload(this)?.userId,
     )
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
