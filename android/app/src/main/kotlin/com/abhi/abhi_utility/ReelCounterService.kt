@@ -111,6 +111,39 @@ class ReelCounterService : AccessibilityService() {
 
         /** Keep the ⬇ button a moment after playback stops (no flicker between videos). */
         private const val BUBBLE_HIDE_DELAY_MS = 2500L
+
+        // ---- Uninstall protection ----
+
+        /** fingerprintPkg while the fingerprint prompt is for the uninstall guard. */
+        private const val GUARD_PKG = "#uninstall-guard"
+
+        /** Uninstall confirmation dialogs (Google / AOSP / Samsung). */
+        private val INSTALLER_PACKAGES = setOf(
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.samsung.android.packageinstaller",
+        )
+
+        /** Where Abhi Utility can be uninstalled, force-stopped or have its protection removed. */
+        private val GUARD_PACKAGES = INSTALLER_PACKAGES + setOf(
+            "com.android.settings",
+            "com.samsung.accessibility", // Samsung's accessibility settings
+            "com.google.android.permissioncontroller",
+            "com.miui.securitycenter",
+            "com.coloros.safecenter",
+        )
+
+        /** Buttons/words on screens that can remove the protection (English system language). */
+        private val GUARD_WORDS = listOf(
+            "Uninstall", "Force stop", "Deactivate", "Disable", "Turn off", "Clear data",
+            "Clear storage", "Device admin", "Accessibility",
+        )
+
+        /** Screen (activity) names of App info, device admin and uninstall pages (any language). */
+        private val GUARD_SCREENS = listOf("AppInfo", "InstalledAppDetails", "DeviceAdmin", "Uninstall", "Accessibility")
+
+        /** Content changes in Settings come in bursts: look at the screen at most this often. */
+        private const val GUARD_CHECK_GAP_MS = 250L
     }
 
     // Download bubble.
@@ -267,6 +300,8 @@ class ReelCounterService : AccessibilityService() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 Intent.ACTION_SCREEN_OFF -> {
+                    guardUnlockedUntil = 0 // protected screens need the password again
+                    hideGuard()
                     setForeground(null)
                     anyForegroundPkg = null
                     updateBubble()
@@ -425,9 +460,20 @@ class ReelCounterService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
 
+        // Content changes are only used by the uninstall guard (Settings pages load bit by bit).
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            if (pkg in GUARD_PACKAGES) scheduleGuardCheck()
+            return
+        }
+
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             // Which app is really in front (a keyboard or dialog event shouldn't count).
             val active = rootInActiveWindow?.packageName?.toString() ?: pkg
+            if (pkg == active && active in GUARD_PACKAGES) {
+                // Screen name (e.g. ...InstalledAppDetails); dialogs/widgets (android.*) keep the page's.
+                event.className?.toString()?.takeIf { !it.startsWith("android.") }?.let { guardScreen = it }
+            }
+            checkUninstallGuard(active)
             if (active !in IGNORED_PACKAGES) setForeground(active)
             // Includes this app itself, so the ⬇ button hides when Abhi Utility opens.
             if (active != "com.android.systemui") {
@@ -599,6 +645,38 @@ class ReelCounterService : AccessibilityService() {
 
     private fun centered() = LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER_HORIZONTAL }
 
+    /** 3×4 number pad (digits, ⌫, OK); keys big in portrait, smaller in landscape. */
+    private fun numberPad(landscape: Boolean, onKey: (String) -> Unit): LinearLayout {
+        val screenH = resources.displayMetrics.heightPixels
+        val key = if (landscape) minOf(dp(64f), (screenH - dp(48f)) / 4 - dp(12f)) else dp(72f)
+        val gap = if (landscape) dp(6f) else dp(8f)
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK").chunked(3).forEach { rowKeys ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+            rowKeys.forEach { k ->
+                row.addView(Button(this).apply {
+                    text = k
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, if (landscape) 18f else 22f)
+                    setTextColor(if (k == "OK") Color.BLACK else Color.WHITE)
+                    setPadding(0, 0, 0, 0)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(if (k == "OK") Color.rgb(0, 210, 255) else Color.argb(40, 255, 255, 255))
+                    }
+                    setOnClickListener { onKey(k) }
+                }, LinearLayout.LayoutParams(key, key).apply { setMargins(gap * 2, gap, gap * 2, gap) })
+            }
+            grid.addView(row, centered())
+        }
+        return grid
+    }
+
     /** Fingerprint (strong biometric) set up on this phone and allowed in App Lock settings. */
     private fun fingerprintUsable(): Boolean {
         if (!AppLock.fingerprintEnabled(this)) return false
@@ -678,41 +756,13 @@ class ReelCounterService : AccessibilityService() {
             }
             val cancel = padButton("Cancel", false) { hidePinPad() }
 
-            // Keys sized to fit: big in portrait, smaller in landscape.
-            val screenH = resources.displayMetrics.heightPixels
-            val key = if (landscape) minOf(dp(64f), (screenH - dp(48f)) / 4 - dp(12f)) else dp(72f)
-            val gap = if (landscape) dp(6f) else dp(8f)
-            val grid = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_HORIZONTAL
-            }
-            listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK").chunked(3).forEach { rowKeys ->
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER
+            val grid = numberPad(landscape) { k ->
+                error.text = ""
+                when (k) {
+                    "⌫" -> { entered = entered.dropLast(1); render() }
+                    "OK" -> onOk()
+                    else -> { if (entered.length < 6) entered += k; render() }
                 }
-                rowKeys.forEach { k ->
-                    row.addView(Button(this).apply {
-                        text = k
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, if (landscape) 18f else 22f)
-                        setTextColor(if (k == "OK") Color.BLACK else Color.WHITE)
-                        setPadding(0, 0, 0, 0)
-                        background = GradientDrawable().apply {
-                            shape = GradientDrawable.OVAL
-                            setColor(if (k == "OK") Color.rgb(0, 210, 255) else Color.argb(40, 255, 255, 255))
-                        }
-                        setOnClickListener {
-                            error.text = ""
-                            when (k) {
-                                "⌫" -> entered = entered.dropLast(1)
-                                "OK" -> { onOk(); return@setOnClickListener }
-                                else -> if (entered.length < 6) entered += k
-                            }
-                            render()
-                        }
-                    }, LinearLayout.LayoutParams(key, key).apply { setMargins(gap * 2, gap, gap * 2, gap) })
-                }
-                grid.addView(row, centered())
             }
 
             setContent(if (landscape) {
@@ -796,7 +846,7 @@ class ReelCounterService : AccessibilityService() {
     private var fingerprintPkg: String? = null
     private val fingerprintTimeout = Runnable { onFingerprintResult(fingerprintPkg ?: "", false) }
 
-    private fun startFingerprint(pkg: String, name: String) {
+    private fun startFingerprint(pkg: String, name: String, subtitle: String? = null) {
         fingerprintPkg = pkg
         setOverlaysHidden(true) // the prompt must be visible and tappable
         handler.postDelayed(fingerprintTimeout, 90_000) // never leave the app unlocked by accident
@@ -805,6 +855,7 @@ class ReelCounterService : AccessibilityService() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra(FingerprintActivity.EXTRA_PKG, pkg)
                 .putExtra(FingerprintActivity.EXTRA_APP_NAME, name)
+                .putExtra(FingerprintActivity.EXTRA_SUBTITLE, subtitle)
         )
     }
 
@@ -814,6 +865,10 @@ class ReelCounterService : AccessibilityService() {
         val expected = fingerprintPkg
         fingerprintPkg = null
         setOverlaysHidden(false)
+        if (expected == GUARD_PKG) {
+            if (success && pkg == GUARD_PKG) unlockGuard()
+            return
+        }
         if (success && pkg == expected && pkg == fgPkg) {
             showPinPad(pkg, fromLockScreen = true, verified = true)
         }
@@ -822,7 +877,7 @@ class ReelCounterService : AccessibilityService() {
     /** Hides the lock screen + pad while the fingerprint prompt is shown (and lets touches through). */
     private fun setOverlaysHidden(hidden: Boolean) {
         val wm = windowManager ?: return
-        for (v in listOfNotNull(pinView, blockView)) {
+        for (v in listOfNotNull(pinView, blockView, guardView)) {
             val lp = v.layoutParams as? WindowManager.LayoutParams ?: continue
             v.visibility = if (hidden) View.GONE else View.VISIBLE
             lp.flags = if (hidden) lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -936,6 +991,163 @@ class ReelCounterService : AccessibilityService() {
             fgSince = SystemClock.elapsedRealtime()
             if (pkg in ReelApps.NAMES) showOverlay()
         }
+    }
+
+    // ---- Uninstall protection: password over screens that could remove Abhi Utility ----
+
+    private var guardView: View? = null
+    private var guardUnlockedUntil = 0L
+    private var guardScreen: String? = null // class of the last Settings / installer screen
+    private var guardCheckPending = false
+
+    private val guardCheckTask = Runnable {
+        guardCheckPending = false
+        checkUninstallGuard(rootInActiveWindow?.packageName?.toString())
+    }
+
+    private fun guardOn() = UninstallProtection.isOn(this) && UninstallProtection.hasAnyPassword(this)
+
+    private fun scheduleGuardCheck() {
+        if (guardCheckPending || !guardOn()) return
+        guardCheckPending = true
+        handler.postDelayed(guardCheckTask, GUARD_CHECK_GAP_MS)
+    }
+
+    /** Lets the parent use protected screens for a while (right password, or turning protection on). */
+    fun allowProtectedScreens() {
+        guardUnlockedUntil = SystemClock.elapsedRealtime() + UninstallProtection.UNLOCK_MS
+        hideGuard()
+    }
+
+    /** Covers the screen in front if it could uninstall Abhi Utility or remove its protection. */
+    private fun checkUninstallGuard(pkg: String?) {
+        // Our own windows (fingerprint prompt) and the status bar don't change anything.
+        if (pkg == null || pkg == packageName || pkg == "com.android.systemui") return
+        if (fingerprintPkg == GUARD_PKG) return
+        if (pkg !in GUARD_PACKAGES) guardScreen = null // left Settings
+        if (pkg !in GUARD_PACKAGES || !guardOn() || SystemClock.elapsedRealtime() < guardUnlockedUntil) {
+            hideGuard()
+            return
+        }
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != pkg) return
+        if (screenIsProtected(root, pkg)) showGuard() else hideGuard()
+    }
+
+    private fun screenIsProtected(root: AccessibilityNodeInfo, pkg: String): Boolean {
+        fun has(text: String) = try {
+            root.findAccessibilityNodeInfosByText(text).isNotEmpty()
+        } catch (_: Exception) {
+            false
+        }
+        // Also matches "Abhi Utility reel counter" (accessibility) and "… uninstall protection" (device admin).
+        val appName = packageManager.getApplicationLabel(applicationInfo).toString()
+        if (!has(appName)) return false
+        if (pkg in INSTALLER_PACKAGES) return true // "Do you want to uninstall Abhi Utility?"
+        // Settings: Abhi Utility's App info / device admin / accessibility page, not just a list showing its name.
+        val screen = guardScreen.orEmpty()
+        return GUARD_SCREENS.any { screen.contains(it, ignoreCase = true) } || GUARD_WORDS.any { has(it) }
+    }
+
+    private fun unlockGuard() {
+        allowProtectedScreens()
+        Toast.makeText(this, "Unlocked for ${UninstallProtection.UNLOCK_MS / 60_000} minutes", Toast.LENGTH_SHORT).show()
+    }
+
+    /** "Protected by Abhi Utility": App Lock / Diary password or fingerprint, or go back. */
+    private fun showGuard() {
+        if (guardView != null) return
+        val wm = windowManager ?: return
+        val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+        var entered = ""
+        val dots = padTitle("", 30f)
+        val error = padTitle("", 14f).apply { setTextColor(Color.rgb(255, 110, 110)) }
+        fun render() { dots.text = if (entered.isEmpty()) "– – – –" else "● ".repeat(entered.length).trim() }
+        render()
+
+        val info = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            addView(padTitle("🛡️ Protected by Abhi Utility", 22f), centered())
+            addView(padTitle("Enter the App Lock or Diary password\nto uninstall or change Abhi Utility", 15f, 200),
+                centered().apply { topMargin = dp(6f) })
+            addView(dots, centered().apply { topMargin = dp(16f) })
+            addView(error, centered().apply { bottomMargin = dp(8f) })
+            if (fingerprintUsable()) {
+                addView(padButton("👆 Use fingerprint", false) {
+                    startFingerprint(GUARD_PKG, "Abhi Utility", "Uninstall or change Abhi Utility")
+                }, centered().apply { topMargin = dp(4f) })
+            }
+        }
+        val grid = numberPad(landscape) { k ->
+            error.text = ""
+            when (k) {
+                "⌫" -> { entered = entered.dropLast(1); render() }
+                "OK" -> if (UninstallProtection.checkPassword(this, entered)) {
+                    unlockGuard()
+                } else {
+                    entered = ""
+                    error.text = "Wrong password"
+                    render()
+                }
+                else -> { if (entered.length < 6) entered += k; render() }
+            }
+        }
+        val back = padButton("Go back", false) {
+            hideGuard()
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24f), dp(24f), dp(24f), dp(24f))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                addView(info, centered())
+                if (landscape) addView(back, centered().apply { topMargin = dp(12f) })
+            }, LinearLayout.LayoutParams(-2, -2).apply {
+                gravity = Gravity.CENTER
+                if (landscape) marginEnd = dp(40f)
+            })
+            addView(grid, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER })
+            if (!landscape) addView(back, centered().apply { topMargin = dp(20f) })
+        }
+        val container = android.widget.FrameLayout(this).apply {
+            addView(content, android.widget.FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        }
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(Color.rgb(12, 14, 40))
+            addView(container, android.widget.FrameLayout.LayoutParams(-1, -2))
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.OPAQUE
+        )
+        try {
+            wm.addView(scroll, params)
+            guardView = scroll
+            Log.d(TAG, "uninstall guard shown over $guardScreen")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not show uninstall guard", e)
+            performGlobalAction(GLOBAL_ACTION_HOME) // never leave the screen open
+        }
+    }
+
+    private fun hideGuard() {
+        guardView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (_: Exception) {
+            }
+        }
+        guardView = null
     }
 
     private fun dp(v: Float) =
@@ -1180,6 +1392,8 @@ class ReelCounterService : AccessibilityService() {
         hideBlockScreen()
         hideCountdown()
         hidePinPad()
+        hideGuard()
+        handler.removeCallbacks(guardCheckTask)
         hideBubble()
         handler.removeCallbacks(hideBubbleTask)
         audioManager?.unregisterAudioPlaybackCallback(audioCallback)

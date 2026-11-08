@@ -93,6 +93,12 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   bool _bioPrompted = false; // ask for the fingerprint once each time the tab locks
   bool _unlocked = false;
   List<LockRule> _rules = [];
+
+  /// Uninstall protection: {on, admin, guard, hasPassword} from the native side.
+  Map<String, bool> _protection = const {};
+
+  /// True while Android's "Activate device admin" screen is open (leaving for it mustn't relock).
+  bool _inSystemScreen = false;
   List<InstalledApp>? _apps;
 
   @override
@@ -106,7 +112,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) refresh();
     // Leaving the app locks the tab again.
-    if (state == AppLifecycleState.paused) relock();
+    if (state == AppLifecycleState.paused && !_inSystemScreen) relock();
   }
 
   void relock() {
@@ -130,8 +136,10 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       final raw = await _channel.invokeListMethod<Map>('rules') ?? [];
       final fingerprint = await _channel.invokeMethod<bool>('fingerprintEnabled') ?? true;
       final bioAvailable = await DiaryLock.biometricAvailable();
+      final protection = await _channel.invokeMapMethod<String, bool>('protectionStatus') ?? const {};
       if (!mounted) return;
       setState(() {
+        _protection = protection;
         _hasPin = hasPin;
         _fingerprint = fingerprint;
         _bioAvailable = bioAvailable;
@@ -245,6 +253,101 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       await _channel.invokeMethod('setRule', {'pkg': pkg, 'mode': result.$1, 'minutes': result.$2});
     }
     await refresh();
+  }
+
+  // ---- Uninstall protection ---------------------------------------------------------
+
+  Future<void> _setProtection(bool on) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!on) {
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.shield_outlined, size: 40),
+          title: const Text('Turn off uninstall protection?'),
+          content: const Text('Anyone will be able to uninstall Abhi Utility again.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Turn off')),
+          ],
+        ),
+      );
+      if (yes != true) return;
+      final s = await _channel.invokeMapMethod<String, bool>('disableProtection') ?? const {};
+      if (mounted) setState(() => _protection = s);
+      messenger.showSnackBar(const SnackBar(content: Text('Uninstall protection is off')));
+      return;
+    }
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.shield_outlined, size: 40),
+        title: const Text('Protect Abhi Utility from being uninstalled'),
+        content: const Text(
+          "Children won't be able to uninstall Abhi Utility, force-stop it, or turn off its "
+          'accessibility service. Those screens will ask for the App Lock or Diary password '
+          '(or your fingerprint).\n\n'
+          'On the next screen Android asks to activate a "device admin app": tap Activate.\n\n'
+          'To uninstall later, turn this switch off first.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continue')),
+        ],
+      ),
+    );
+    if (go != true) return;
+    _inSystemScreen = true;
+    try {
+      final s = await _channel.invokeMapMethod<String, bool>('enableProtection') ?? const {};
+      if (!mounted) return;
+      setState(() => _protection = s);
+      messenger.showSnackBar(SnackBar(
+        content: Text(s['on'] == true
+            ? '🛡️ Uninstall protection is on'
+            : "Not turned on: tap Activate on Android's screen to protect the app"),
+      ));
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message ?? 'Could not turn on protection')));
+    } finally {
+      _inSystemScreen = false;
+    }
+  }
+
+  Widget _protectionCard(ColorScheme scheme) {
+    final on = _protection['on'] == true;
+    final admin = _protection['admin'] == true;
+    final guard = _protection['guard'] == true;
+    return Card(
+      child: Column(
+        children: [
+          SwitchListTile(
+            secondary: CircleAvatar(child: Icon(on ? Icons.shield : Icons.shield_outlined)),
+            title: const Text('Uninstall protection'),
+            subtitle: Text(on
+                ? "Children can't uninstall Abhi Utility. It needs the App Lock or Diary password, or your fingerprint."
+                : 'Stop children from uninstalling Abhi Utility without the password'),
+            value: on,
+            onChanged: _setProtection,
+          ),
+          if (on && !admin)
+            ListTile(
+              leading: Icon(Icons.warning_amber, color: scheme.error),
+              title: const Text("Android's uninstall block is off"),
+              subtitle: const Text('Tap to activate it again'),
+              onTap: () => _setProtection(true),
+            ),
+          if (on && !guard)
+            ListTile(
+              leading: Icon(Icons.warning_amber, color: scheme.error),
+              title: const Text('Settings are not protected'),
+              subtitle: const Text('Turn on "Abhi Utility reel counter" in Accessibility settings'),
+              onTap: () => _reels.invokeMethod('openSettings'),
+            ),
+        ],
+      ),
+    );
   }
 
   // ---- UI ----------------------------------------------------------------------------
@@ -386,6 +489,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
                 },
               ),
             ),
+            _protectionCard(scheme),
             if (_rules.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 48),

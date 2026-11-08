@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FlashlightPage extends StatefulWidget {
   const FlashlightPage({super.key});
@@ -35,16 +36,25 @@ class _FlashlightPageState extends State<FlashlightPage> {
     try {
       final hasTorch = await _control.invokeMethod<bool>('hasTorch') ?? false;
       setState(() => _torchAvailable = hasTorch);
-      // Shake detection runs in the background service, so start it on launch.
-      if (hasTorch) await _setShake(true);
+      // Shake detection runs in the background service: start it on launch only
+      // if the user left it on (on by default the first time).
+      final prefs = await SharedPreferences.getInstance();
+      final wanted = prefs.getBool(_shakePrefKey) ?? true;
+      if (hasTorch) await _setShake(wanted, save: false);
     } on PlatformException catch (e) {
       _showError(e.message);
     }
   }
 
-  Future<void> _setShake(bool enable) async {
+  /// Saved on/off choice for "Shake to toggle". The service's notification
+  /// "Stop" button writes the same key (FlutterSharedPreferences "flutter.shake_enabled").
+  static const _shakePrefKey = 'shake_enabled';
+
+  Future<void> _setShake(bool enable, {bool save = true}) async {
     try {
       await _control.invokeMethod(enable ? 'startService' : 'stopService');
+      if (save) await (await SharedPreferences.getInstance()).setBool(_shakePrefKey, enable);
+      if (!mounted) return;
       setState(() => _shakeEnabled = enable);
     } on PlatformException catch (e) {
       _showError(e.message);

@@ -148,6 +148,8 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(protectionStatus())
                     } else {
                         // Android asks "Activate device admin app?"; answer in onActivityResult.
+                        // (If protection was on before, its guard must not cover that screen.)
+                        ReelCounterService.instance?.allowProtectedScreens()
                         pendingProtection?.success(protectionStatus())
                         pendingProtection = result
                         @Suppress("DEPRECATION")

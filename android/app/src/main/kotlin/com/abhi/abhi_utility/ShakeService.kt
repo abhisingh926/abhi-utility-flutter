@@ -85,6 +85,10 @@ class ShakeService : Service(), SensorEventListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // Remember "off", so opening the app doesn't turn shake back on.
+            // Same store/key the Flutter side reads (shared_preferences: "flutter." prefix).
+            getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE).edit()
+                .putBoolean("flutter.shake_enabled", false).apply()
             stopSelf()
             return START_NOT_STICKY
         }
