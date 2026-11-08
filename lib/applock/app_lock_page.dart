@@ -204,9 +204,9 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => _AppPicker(
+      builder: (context) => AppPicker(
         loadApps: _loadApps,
-        lockedPkgs: _rules.map((r) => r.pkg).toSet(),
+        excludedPkgs: _rules.map((r) => r.pkg).toSet(),
         iconBuilder: _icon,
         initialFilter: filter,
         selectAllInitially: selectAll,
@@ -556,29 +556,47 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
 
 }
 
-/// Searchable, filterable, multi-select list of installed apps.
-class _AppPicker extends StatefulWidget {
-  const _AppPicker({
+/// Searchable, filterable, multi-select list of installed apps (App Lock, reel counter).
+/// Pops with the ticked apps.
+class AppPicker extends StatefulWidget {
+  const AppPicker({
+    super.key,
     required this.loadApps,
-    required this.lockedPkgs,
     required this.iconBuilder,
+    this.excludedPkgs = const {},
+    this.initiallySelected = const {},
     this.initialFilter = AppFilter.all,
     this.selectAllInitially = false,
+    this.confirmLabel,
+    this.confirmIcon = Icons.lock,
+    this.allowEmpty = false,
   });
 
   final Future<List<InstalledApp>> Function() loadApps;
-  final Set<String> lockedPkgs;
   final Widget Function(Uint8List?, {double size}) iconBuilder;
+
+  /// Not listed (e.g. apps that already have a lock rule).
+  final Set<String> excludedPkgs;
+
+  /// Ticked when the picker opens.
+  final Set<String> initiallySelected;
   final AppFilter initialFilter;
 
   /// Tick every app of [initialFilter] once loaded ("lock all social media").
   final bool selectAllInitially;
 
+  /// Button text for the number of ticked apps (default: "Next: lock N apps").
+  final String Function(int count)? confirmLabel;
+  final IconData confirmIcon;
+
+  /// The button works with nothing ticked.
+  final bool allowEmpty;
+
   @override
-  State<_AppPicker> createState() => _AppPickerState();
+  State<AppPicker> createState() => _AppPickerState();
 }
 
-class _AppPickerState extends State<_AppPicker> {
+class _AppPickerState extends State<AppPicker> {
   late final Future<List<InstalledApp>> _future = widget.loadApps().then((apps) {
     if (widget.selectAllInitially) {
       _selected.addAll(_available(apps).where(widget.initialFilter.matches).map((a) => a.pkg));
@@ -587,10 +605,10 @@ class _AppPickerState extends State<_AppPicker> {
   });
   late AppFilter _filter = widget.initialFilter;
   String _query = '';
-  final Set<String> _selected = {};
+  late final Set<String> _selected = {...widget.initiallySelected};
 
   List<InstalledApp> _available(List<InstalledApp> apps) =>
-      apps.where((a) => !widget.lockedPkgs.contains(a.pkg)).toList();
+      apps.where((a) => !widget.excludedPkgs.contains(a.pkg)).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -611,6 +629,8 @@ class _AppPickerState extends State<_AppPicker> {
               .where((a) => q.isEmpty || a.label.toLowerCase().contains(q))
               .toList();
           final allShownSelected = shown.isNotEmpty && shown.every((a) => _selected.contains(a.pkg));
+          // Ticked apps that are installed (initiallySelected may name apps that aren't).
+          final picked = all.where((a) => _selected.contains(a.pkg)).length;
 
           return Column(
             children: [
@@ -664,7 +684,7 @@ class _AppPickerState extends State<_AppPicker> {
                       label: Text(allShownSelected ? 'Unselect all' : 'Select all ${_filter == AppFilter.all ? '' : _filter.label}'),
                     ),
                     const Spacer(),
-                    Text('${_selected.length} selected'),
+                    Text('$picked selected'),
                     const SizedBox(width: 8),
                   ],
                 ),
@@ -703,16 +723,15 @@ class _AppPickerState extends State<_AppPicker> {
                   child: SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: _selected.isEmpty
+                      onPressed: picked == 0 && !widget.allowEmpty
                           ? null
                           : () => Navigator.pop(
                                 context,
                                 all.where((a) => _selected.contains(a.pkg)).toList(),
                               ),
-                      icon: const Icon(Icons.lock),
-                      label: Text(_selected.isEmpty
-                          ? 'Select apps to lock'
-                          : 'Next: lock ${_selected.length} app${_selected.length == 1 ? '' : 's'}'),
+                      icon: Icon(widget.confirmIcon),
+                      label: Text(widget.confirmLabel?.call(picked) ??
+                          (picked == 0 ? 'Select apps to lock' : 'Next: lock $picked app${picked == 1 ? '' : 's'}')),
                     ),
                   ),
                 ),

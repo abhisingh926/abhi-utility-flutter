@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../applock/app_lock_page.dart' show AppPicker, InstalledApp;
+
 /// Daily reel report. Counting happens natively in ReelCounterService.kt
 /// (an Accessibility Service); this page reads the stored counts.
 class ReelsPage extends StatefulWidget {
@@ -12,11 +14,18 @@ class ReelsPage extends StatefulWidget {
 
 class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   static const _channel = MethodChannel('abhi_utility/reels');
+  static const _appsChannel = MethodChannel('abhi_utility/applock');
   static const _historyDays = 30;
 
   bool _enabled = false;
   bool _loading = true;
   Map<String, String> _names = {};
+
+  /// Packages whose reels are counted.
+  List<String> _counted = [];
+
+  /// Installed apps for the picker (loaded the first time it opens).
+  List<InstalledApp>? _installed;
 
   /// Newest first: (date, {package: count}).
   List<MapEntry<String, Map<String, int>>> _days = [];
@@ -41,7 +50,6 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   Future<void> refresh() async {
     try {
       final enabled = await _channel.invokeMethod<bool>('isEnabled') ?? false;
-      final names = await _channel.invokeMapMethod<String, String>('appNames') ?? {};
       final raw = await _channel.invokeMapMethod<String, dynamic>('stats', {'days': _historyDays}) ?? {};
       final days = raw.entries
           .map((e) => MapEntry(
@@ -56,6 +64,15 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
             (v as Map).map((k, s) => MapEntry(k as String, s as int)),
           ));
       final overlay = await _channel.invokeMethod<bool>('isOverlayEnabled') ?? true;
+      final counted = await _channel.invokeListMethod<String>('countedApps') ?? [];
+      // Names for every app in the history too (apps counted earlier, then removed).
+      final names = await _channel.invokeMapMethod<String, String>('appNames', {
+            'pkgs': {
+              for (final d in days) ...d.value.keys,
+              for (final d in seconds.values) ...d.keys,
+            }.toList(),
+          }) ??
+          {};
       if (!mounted) return;
       setState(() {
         _enabled = enabled;
@@ -63,6 +80,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
         _days = days;
         _seconds = seconds;
         _overlayEnabled = overlay;
+        _counted = counted;
         _loading = false;
       });
     } on PlatformException {
@@ -96,6 +114,62 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     final m = seconds ~/ 60;
     if (m >= 60) return '${m ~/ 60}h ${m % 60}m';
     return '$m min';
+  }
+
+  Future<List<InstalledApp>> _loadApps() async {
+    if (_installed != null) return _installed!;
+    final raw = await _appsChannel.invokeListMethod<Map>('apps') ?? [];
+    return _installed = raw.map(InstalledApp.fromMap).toList();
+  }
+
+  static Widget _pickerIcon(Uint8List? bytes, {double size = 40}) => bytes == null
+      ? Icon(Icons.apps, size: size)
+      : Image.memory(bytes, width: size, height: size, gaplessPlayback: true);
+
+  Future<void> _chooseApps() async {
+    final picked = await showModalBottomSheet<List<InstalledApp>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => AppPicker(
+        loadApps: _loadApps,
+        iconBuilder: _pickerIcon,
+        initiallySelected: _counted.toSet(),
+        confirmIcon: Icons.check,
+        allowEmpty: true,
+        confirmLabel: (n) => n == 0 ? "Don't count any app" : 'Count reels in $n app${n == 1 ? '' : 's'}',
+      ),
+    );
+    if (picked == null || !mounted) return;
+    // Keep chosen apps that aren't installed right now (e.g. TikTok): counted once installed.
+    final installed = _installed!.map((a) => a.pkg).toSet();
+    final pkgs = {
+      ...picked.map((a) => a.pkg),
+      ..._counted.where((p) => !installed.contains(p)),
+    }.toList();
+    await _channel.invokeMethod('setCountedApps', {'pkgs': pkgs});
+    await refresh();
+  }
+
+  Widget _appsCard(BuildContext context) {
+    final installed = _installed?.map((a) => a.pkg).toSet();
+    // Before the installed list is loaded, show every chosen app.
+    final shown = [for (final p in _counted) if (installed == null || installed.contains(p)) _appName(p)];
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.checklist),
+        title: const Text('Apps counted'),
+        subtitle: Text(
+          shown.isEmpty
+              ? 'No apps chosen: reels are not counted'
+              : shown.length <= 4
+                  ? shown.join(', ')
+                  : '${shown.take(4).join(', ')} +${shown.length - 4} more',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: _chooseApps,
+      ),
+    );
   }
 
   Widget _overlayCard(BuildContext context) {
@@ -133,6 +207,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
         children: [
           if (!_enabled) _enableCard(context),
           if (_enabled) _overlayCard(context),
+          _appsCard(context),
           if (_days.isNotEmpty) ...[
             _todayCard(context),
             const SizedBox(height: 12),
@@ -142,7 +217,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
           ],
           const SizedBox(height: 12),
           Text(
-            'Counts each swipe to a new reel or short. Data stays on this phone.',
+            'Counts each swipe to a new full-screen video in the chosen apps. Data stays on this phone.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
