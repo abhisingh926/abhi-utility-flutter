@@ -26,6 +26,7 @@ import 'pdf/pdf_scanner_page.dart';
 import 'pdf/pdf_viewer_page.dart';
 import 'pdf/pdf_store.dart';
 import 'reels/reels_page.dart';
+import 'sos/sos_page.dart';
 import 'vpn/vpn_page.dart';
 import 'zip/zip_page.dart';
 
@@ -78,6 +79,7 @@ class _HomeShellState extends State<HomeShell> {
   static const _apkTab = 10;
   static const _zipTab = 11;
   static const _excelTab = 12;
+  static const _sosTab = 13;
 
   /// Every feature: drives both the Home page cards and the bottom bar.
   static const _features = [
@@ -104,7 +106,9 @@ class _HomeShellState extends State<HomeShell> {
     HomeFeature(tab: _zipTab, icon: Icons.folder_zip_outlined, title: 'Zip',
         subtitle: 'Zip, unzip, view & lock zip files', color: Colors.indigo),
     HomeFeature(tab: _excelTab, icon: Icons.table_chart_outlined, title: 'Excel Viewer',
-        subtitle: 'View all Excel & CSV files', color: Color(0xFF1D6F42)),
+        subtitle: 'View & edit Excel and CSV files', color: Color(0xFF1D6F42)),
+    HomeFeature(tab: _sosTab, icon: Icons.sos, title: 'SOS',
+        subtitle: 'Draw S on the lock screen to call for help', color: Colors.red),
   ];
 
   final _homeKey = GlobalKey<HomePageState>();
@@ -115,6 +119,7 @@ class _HomeShellState extends State<HomeShell> {
   final _apkKey = GlobalKey<ApkExtractorPageState>();
   final _zipKey = GlobalKey<ZipPageState>();
   final _excelKey = GlobalKey<ExcelPageState>();
+  final _sosKey = GlobalKey<SosPageState>();
   int _tab = _homeTab;
 
   /// Features shown in the bottom bar after Home (chosen on the Home page).
@@ -250,6 +255,7 @@ class _HomeShellState extends State<HomeShell> {
     if (i == _viewerTab) _viewerKey.currentState?.refresh();
     if (i == _apkTab) _apkKey.currentState?.refresh();
     if (i == _zipTab) _zipKey.currentState?.refresh();
+    if (i == _sosTab) _sosKey.currentState?.refresh();
   }
 
   @override
@@ -322,6 +328,7 @@ class _HomeShellState extends State<HomeShell> {
                 ApkExtractorPage(key: _apkKey),
                 ZipPage(key: _zipKey),
                 ExcelPage(key: _excelKey),
+                SosPage(key: _sosKey),
               ],
             ),
             if (_tab != _homeTab)

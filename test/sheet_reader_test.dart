@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:abhi_utility/excel/sheet_reader.dart';
+import 'package:abhi_utility/excel/sheet_writer.dart';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -118,5 +119,85 @@ void main() {
 
   test('column names', () {
     expect([0, 25, 26, 701, 702].map(columnName), ['A', 'Z', 'AA', 'ZZ', 'AAA']);
+  });
+
+  test('typed input becomes number / formula / text', () {
+    expect(parseInput('1,234.5').kind, CellKind.number);
+    expect(parseInput('1,234.5').value, '1234.5');
+    expect(parseInput('12.5%').value, '0.125');
+    expect(parseInput('=SUM(A1:A3)').value, 'SUM(A1:A3)');
+    expect(parseInput('09876543210').kind, CellKind.text); // phone number keeps its 0
+    expect(parseInput('+91 98765').kind, CellKind.text);
+    expect(parseInput('hello').kind, CellKind.text);
+    expect(parseInput('  ').kind, CellKind.empty);
+    expect(parseInput('05/01/2025', format: 'dd/mm/yyyy').value, '45662');
+    expect(parseInput('05/01/2025').kind, CellKind.text); // not a date cell
+  });
+
+  test('edits are saved into the xlsx and read back', () {
+    final original = _xlsx();
+    final book = parseWorkbook(original, 'budget.xlsx');
+    final s = book.sheets.first;
+    expect(s.formulas[SheetData.key(3, 1)], 'SUM(B3:B3)');
+    expect(editText(s, 3, 1), '=SUM(B3:B3)');
+    expect(editText(s, 2, 1), '1234567.5'); // the number, not "₹ 1,234,567.50"
+    final edits = <int, String>{
+      SheetData.key(2, 1): '2000', // keeps its ₹ format
+      SheetData.key(2, 0): 'House rent', // replaces a shared string
+      SheetData.key(4, 1): '', // cleared
+      SheetData.key(9, 4): 'new far cell', // E10: new row and column
+      SheetData.key(3, 2): '=B3*2',
+    };
+    edits.forEach((k, v) => setCell(s, k ~/ 16384, k % 16384, v, csv: false));
+    expect(s.cell(2, 1), '₹ 2,000.00');
+    expect(s.rowCount, 10);
+
+    // A new sheet too.
+    final extra = SheetData(name: 'Notes', cells: {}, rowCount: 0, colCount: 0);
+    setCell(extra, 0, 0, 'hello', csv: false);
+    book.sheets.add(extra);
+
+    final saved = saveXlsx(original, book, {s: edits, extra: {SheetData.key(0, 0): 'hello'}});
+    final again = parseWorkbook(saved, 'budget.xlsx');
+    expect(again.sheets.map((x) => x.name), ['Budget', 'Notes']);
+    final s2 = again.sheets.first;
+    expect(s2.cell(2, 1), '₹ 2,000.00');
+    expect(s2.cell(2, 0), 'House rent');
+    expect(s2.cell(4, 1), null);
+    expect(s2.cell(9, 4), 'new far cell');
+    expect(s2.formulas[SheetData.key(3, 2)], 'B3*2');
+    expect(s2.cell(0, 0), 'Monthly budget'); // untouched cells stay
+    expect(s2.merges.length, 1);
+    expect(again.sheets[1].cell(0, 0), 'hello');
+
+    final zip = ZipDecoder().decodeBytes(saved);
+    final wb = utf8.decode(zip.findFile('xl/workbook.xml')!.content);
+    expect(wb.contains('fullCalcOnLoad="1"'), isTrue);
+    final sheet = utf8.decode(zip.findFile('xl/worksheets/sheet1.xml')!.content);
+    expect(sheet.indexOf('r="E10"') > sheet.indexOf('r="C4"'), isTrue); // rows stay in order
+  });
+
+  test('new workbook', () {
+    final book = parseWorkbook(newWorkbook(), 'new.xlsx');
+    final s = book.sheets.single;
+    expect(s.name, 'Sheet1');
+    expect(s.isEmpty, isTrue);
+    setCell(s, 0, 0, 'Name', csv: false);
+    setCell(s, 1, 0, '42', csv: false);
+    final again = parseWorkbook(saveXlsx(newWorkbook(), book, {s: {0: 'Name', 16384: '42'}}), 'new.xlsx');
+    expect(again.sheets.single.cell(0, 0), 'Name');
+    expect(again.sheets.single.cell(1, 0), '42');
+  });
+
+  test('csv save', () {
+    final book = parseWorkbook(Uint8List.fromList(utf8.encode('a;b\n1;2\n')), 'x.csv');
+    expect(book.csvSeparator, ';');
+    final s = book.sheets.single;
+    setCell(s, 1, 1, 'x;y "z"', csv: true);
+    setCell(s, 2, 0, 'new', csv: true);
+    final again = parseWorkbook(saveCsv(s, book.csvSeparator!), 'x.csv').sheets.single;
+    expect(again.cell(1, 1), 'x;y "z"');
+    expect(again.cell(2, 0), 'new');
+    expect(again.cell(0, 1), 'b');
   });
 }

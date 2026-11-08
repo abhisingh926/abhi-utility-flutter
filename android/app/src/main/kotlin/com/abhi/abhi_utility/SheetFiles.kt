@@ -99,6 +99,54 @@ object SheetFiles {
             File(source).readBytes()
         }
 
+    /**
+     * Saves over the original: a content:// uri the app may write to, or a path
+     * (needs "All files access" outside the app's own folders). Throws if not allowed.
+     */
+    fun write(context: Context, source: String, bytes: ByteArray) {
+        if (source.startsWith("content://")) {
+            val out = context.contentResolver.openOutputStream(Uri.parse(source), "wt")
+                ?: throw SecurityException("Not allowed to change this file")
+            out.use { it.write(bytes) }
+            return
+        }
+        val file = File(source.removePrefix("file://"))
+        // The app's own cache (e.g. a picked copy) is not the user's file.
+        if (file.absolutePath.startsWith(context.cacheDir.parentFile!!.absolutePath)) {
+            throw SecurityException("This is a temporary copy")
+        }
+        // Write next to it, then replace: a failed save never leaves half a file.
+        val tmp = File(file.parentFile, ".${file.name}.saving")
+        tmp.writeBytes(bytes)
+        if (!tmp.renameTo(file)) {
+            tmp.delete()
+            file.writeBytes(bytes)
+        }
+    }
+
+    /** Saves a copy in Downloads/AbhiUtility (no permission needed); returns its content:// uri. */
+    fun saveCopy(context: Context, bytes: ByteArray, name: String, mime: String): String {
+        val resolver = context.contentResolver
+        val values = android.content.ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, name)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/AbhiUtility")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("Could not create the file")
+        try {
+            resolver.openOutputStream(uri)!!.use { it.write(bytes) }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+        return uri.toString()
+    }
+
     /** File name of a content:// uri (for the viewer title). */
     fun displayName(context: Context, uri: String): String? = try {
         context.contentResolver.query(Uri.parse(uri), arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)

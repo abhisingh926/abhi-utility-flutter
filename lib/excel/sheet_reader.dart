@@ -21,15 +21,35 @@ class SheetData {
     required this.colCount,
     this.colWidths = const {},
     this.merges = const [],
-    this.bold = const {},
-    this.numeric = const {},
-  });
+    Set<int>? bold,
+    Set<int>? numeric,
+    Map<int, String>? formulas,
+    Map<int, String>? raw,
+    Map<int, String>? formats,
+    this.path,
+  })  : bold = bold ?? {},
+        numeric = numeric ?? {},
+        formulas = formulas ?? {},
+        raw = raw ?? {},
+        formats = formats ?? {};
 
-  final String name;
+  String name;
 
-  /// row → column → shown text (0-based).
+  /// row → column → shown text (0-based). Changed in place while editing.
   final Map<int, Map<int, String>> cells;
-  final int rowCount, colCount;
+  int rowCount, colCount;
+
+  /// Zip entry of this sheet in the .xlsx (null: CSV, or a sheet added in the editor).
+  final String? path;
+
+  /// Formula text without "=" ([key] → "SUM(B2:B9)").
+  final Map<int, String> formulas;
+
+  /// Stored number of numeric cells ("45658", "0.125"): what the editor shows and changes.
+  final Map<int, String> raw;
+
+  /// Number format of formatted cells ("dd/mm/yyyy", "0.00%"); General is not stored.
+  final Map<int, String> formats;
 
   /// Column widths in Excel units (≈ characters).
   final Map<int, double> colWidths;
@@ -45,8 +65,12 @@ class SheetData {
 }
 
 class Workbook {
-  const Workbook(this.sheets);
+  Workbook(this.sheets, {this.csvSeparator});
   final List<SheetData> sheets;
+
+  /// Set for CSV files: the separator to write back (",", ";" or tab).
+  final String? csvSeparator;
+  bool get isCsv => csvSeparator != null;
 }
 
 class SheetFormatException implements Exception {
@@ -72,7 +96,7 @@ Workbook parseWorkbook(Uint8List bytes, String fileName) {
   if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm')) {
     throw const SheetFormatException('This file is damaged or not really an Excel file.');
   }
-  return Workbook([_parseCsv(bytes, fileName)]);
+  return _parseCsv(bytes, fileName);
 }
 
 // ---- Helpers ----------------------------------------------------------------------------
@@ -165,7 +189,7 @@ class _Xlsx {
       final path = rels[_attr(s, 'id')] ?? 'xl/worksheets/sheet$index.xml';
       final xml = _text(path);
       if (xml == null) continue; // a chart sheet, not a grid
-      sheets.add(_sheet(name, xml, shared, styles, date1904));
+      sheets.add(_sheet(name, path, xml, shared, styles, date1904));
     }
     if (sheets.isEmpty) throw const SheetFormatException('This workbook has no sheets to show.');
     return Workbook(sheets);
@@ -186,11 +210,14 @@ class _Xlsx {
     return out;
   }
 
-  static SheetData _sheet(String name, String xml, List<String> shared, _Styles styles, bool date1904) {
+  static SheetData _sheet(String name, String path, String xml, List<String> shared, _Styles styles, bool date1904) {
     final doc = XmlDocument.parse(xml);
     final cells = <int, Map<int, String>>{};
     final bold = <int>{};
     final numeric = <int>{};
+    final formulas = <int, String>{};
+    final raw = <int, String>{};
+    final formats = <int, String>{};
     var maxRow = -1, maxCol = -1;
 
     var nextRow = 0;
@@ -204,6 +231,8 @@ class _Xlsx {
         nextCol = col + 1;
         final style = int.tryParse(_attr(c, 's') ?? '') ?? 0;
         final v = _child(c, 'v')?.innerText;
+        final formula = _child(c, 'f')?.innerText;
+        final format = styles.formatOf(style);
         String? text;
         var isNumber = false;
         switch (_attr(c, 't')) {
@@ -223,15 +252,22 @@ class _Xlsx {
           default:
             final n = double.tryParse(v ?? '');
             if (n != null) {
-              text = formatNumber(n, styles.formatOf(style), date1904: date1904);
+              text = formatNumber(n, format, date1904: date1904);
               isNumber = true;
+              raw[SheetData.key(r, col)] = v!;
             } else {
               text = v;
             }
         }
+        final k = SheetData.key(r, col);
+        if (format != 'General') formats[k] = format; // also for empty cells: typed numbers get it
+        if (formula != null && formula.isNotEmpty) {
+          formulas[k] = formula;
+          // Not calculated yet (e.g. saved by this editor): show the formula.
+          if (text == null || text.isEmpty) text = '=$formula';
+        }
         if (text == null || text.isEmpty) continue;
         (cells[r] ??= {})[col] = text;
-        final k = SheetData.key(r, col);
         if (isNumber) numeric.add(k);
         if (styles.isBold(style)) bold.add(k);
         maxRow = math.max(maxRow, r);
@@ -274,6 +310,10 @@ class _Xlsx {
       merges: merges,
       bold: bold,
       numeric: numeric,
+      formulas: formulas,
+      raw: raw,
+      formats: formats,
+      path: path,
     );
   }
 }
@@ -542,7 +582,7 @@ String formatDate(DateTime d, String pattern) {
 
 // ---- CSV ----------------------------------------------------------------------------------
 
-SheetData _parseCsv(Uint8List bytes, String fileName) {
+Workbook _parseCsv(Uint8List bytes, String fileName) {
   var text = utf8.decode(bytes, allowMalformed: true);
   if (text.startsWith('﻿')) text = text.substring(1);
   if (text.contains('\u0000')) throw const SheetFormatException('This file is not a spreadsheet.');
@@ -598,6 +638,8 @@ SheetData _parseCsv(Uint8List bytes, String fileName) {
   if (field.isNotEmpty || col > 0) endField();
 
   final name = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
-  return SheetData(
-      name: name.isEmpty ? 'Sheet 1' : name, cells: cells, rowCount: maxRow + 1, colCount: maxCol + 1, numeric: numeric);
+  return Workbook([
+    SheetData(
+        name: name.isEmpty ? 'Sheet 1' : name, cells: cells, rowCount: maxRow + 1, colCount: maxCol + 1, numeric: numeric),
+  ], csvSeparator: sep);
 }

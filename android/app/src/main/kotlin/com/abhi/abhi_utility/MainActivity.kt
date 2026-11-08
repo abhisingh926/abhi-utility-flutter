@@ -185,6 +185,62 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
+        // SOS: contacts, on/off, permissions, practice "S" check (Sos.kt).
+        MethodChannel(messenger, "abhi_utility/sos").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "status" -> result.success(sosStatus())
+                "setOn" -> {
+                    Sos.setOn(this, call.argument<Boolean>("on") ?: false)
+                    ReelCounterService.instance?.sos?.refresh()
+                    result.success(sosStatus())
+                }
+                "setContacts" -> {
+                    Sos.setContacts(this, call.argument<List<Map<String, String>>>("contacts") ?: emptyList())
+                    ReelCounterService.instance?.sos?.refresh()
+                    result.success(sosStatus())
+                }
+                "requestPermissions" -> {
+                    val missing = Sos.missingPermissions(this)
+                    if (missing.isEmpty()) {
+                        result.success(sosStatus())
+                    } else {
+                        pendingSosPermissions?.success(sosStatus())
+                        pendingSosPermissions = result
+                        requestPermissions(missing.toTypedArray(), REQUEST_SOS_PERMISSIONS)
+                    }
+                }
+                "openAppSettings" -> {
+                    startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    result.success(null)
+                }
+                "pickContact" -> {
+                    pendingContactPick?.success(null)
+                    pendingContactPick = result
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(
+                        Intent(Intent.ACTION_PICK, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI),
+                        REQUEST_PICK_CONTACT
+                    )
+                }
+                // Practice pad: points [x0, y0, x1, y1, …] in logical pixels.
+                "isS" -> {
+                    val flat = call.argument<List<Double>>("points") ?: emptyList()
+                    val density = resources.displayMetrics.density
+                    val pts = flat.chunked(2).filter { it.size == 2 }
+                        .map { android.graphics.PointF(it[0].toFloat() * density, it[1].toFloat() * density) }
+                    result.success(Sos.isS(pts, 80f * density))
+                }
+                "stop" -> {
+                    ReelCounterService.instance?.sos?.stop()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         // Zip tool: create, view, extract, lock / unlock zips (ZipTool.kt).
         MethodChannel(messenger, "abhi_utility/zip").setMethodCallHandler { call, result ->
             fun <T> bg(work: () -> T) = Thread {
@@ -362,6 +418,31 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }.start()
                 }
+                "write" -> {
+                    val source = call.argument<String>("source")!!
+                    val bytes = call.argument<ByteArray>("bytes")!!
+                    Thread {
+                        try {
+                            SheetFiles.write(this, source, bytes)
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("WRITE_FAILED", e.message, null) }
+                        }
+                    }.start()
+                }
+                "saveCopy" -> {
+                    val bytes = call.argument<ByteArray>("bytes")!!
+                    val name = call.argument<String>("name")!!
+                    val mime = call.argument<String>("mime")!!
+                    Thread {
+                        try {
+                            val uri = SheetFiles.saveCopy(this, bytes, name, mime)
+                            runOnUiThread { result.success(uri) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SAVE_FAILED", e.message, null) }
+                        }
+                    }.start()
+                }
                 "displayName" -> result.success(SheetFiles.displayName(this, call.argument<String>("uri")!!))
                 // Spreadsheet this app was opened with ("Open with → Abhi Utility"), if any.
                 "takeIncoming" -> {
@@ -494,6 +575,49 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private var pendingProtection: MethodChannel.Result? = null
+    private var pendingSosPermissions: MethodChannel.Result? = null
+    private var pendingContactPick: MethodChannel.Result? = null
+
+    private fun sosStatus(): Map<String, Any?> = mapOf(
+        "on" to Sos.isOn(this),
+        "contacts" to Sos.contactMaps(this),
+        "permissions" to Sos.missingPermissions(this).isEmpty(),
+        "service" to isReelServiceEnabled(),
+        "active" to (ReelCounterService.instance?.sos?.isActive ?: false),
+    )
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_SOS_PERMISSIONS) {
+            ReelCounterService.instance?.sos?.refresh()
+            pendingSosPermissions?.success(sosStatus())
+            pendingSosPermissions = null
+        }
+    }
+
+    /** Name + number of the contact picked for SOS (no contacts permission needed). */
+    private fun onContactPicked(resultCode: Int, data: Intent?) {
+        val result = pendingContactPick ?: return
+        pendingContactPick = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            result.success(null)
+            return
+        }
+        try {
+            val phone = android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+            val name = android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+            contentResolver.query(uri, arrayOf(name, phone), null, null, null)?.use {
+                if (it.moveToFirst()) {
+                    result.success(mapOf("name" to (it.getString(0) ?: ""), "number" to (it.getString(1) ?: "")))
+                    return
+                }
+            }
+            result.success(null)
+        } catch (e: Exception) {
+            result.error("PICK_FAILED", e.message, null)
+        }
+    }
 
     /** on: switched on; admin: Android blocks uninstalling; guard: the screen guard can run. */
     private fun protectionStatus(): Map<String, Boolean> = mapOf(
@@ -529,6 +653,10 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_PICK_CONTACT) {
+            onContactPicked(resultCode, data)
+            return
+        }
         if (requestCode == REQUEST_DEVICE_ADMIN) {
             // Only switch on if the parent pressed "Activate".
             if (UninstallProtection.isAdminActive(this)) UninstallProtection.setOn(this, true)
@@ -557,6 +685,8 @@ class MainActivity : FlutterFragmentActivity() {
         const val EXTRA_OPEN = "open"
 
         private const val REQUEST_DEVICE_ADMIN = 4711
+        private const val REQUEST_SOS_PERMISSIONS = 4712
+        private const val REQUEST_PICK_CONTACT = 4713
     }
 
     /** {action: "share", text} for "Share → Abhi Utility", {action: "bubble"} for the ⬇ button, else null. */

@@ -309,9 +309,12 @@ class ReelCounterService : AccessibilityService() {
                     setForeground(null)
                     anyForegroundPkg = null
                     updateBubble()
+                    sos?.onScreenOff()
                 }
-                Intent.ACTION_USER_PRESENT, Intent.ACTION_SCREEN_ON ->
+                Intent.ACTION_USER_PRESENT, Intent.ACTION_SCREEN_ON -> {
                     setForeground(rootInActiveWindow?.packageName?.toString())
+                    sos?.onScreenOn(rootInActiveWindow?.packageName?.toString())
+                }
             }
         }
     }
@@ -337,7 +340,14 @@ class ReelCounterService : AccessibilityService() {
         }
         anyForegroundPkg = rootInActiveWindow?.packageName?.toString()
         updateBubble()
+
+        // SOS: "S" drawn on the lock screen calls the SOS contacts (Sos.kt).
+        sos = SosController(this).also { it.onScreenOn(rootInActiveWindow?.packageName?.toString()) }
     }
+
+    /** SOS strip + calls; null until the service is connected. */
+    var sos: SosController? = null
+        private set
 
     // ---- Download bubble ------------------------------------------------------------
 
@@ -478,6 +488,7 @@ class ReelCounterService : AccessibilityService() {
                 event.className?.toString()?.takeIf { !it.startsWith("android.") }?.let { guardScreen = it }
             }
             checkUninstallGuard(active)
+            sos?.onWindowChanged(active)
             if (active !in IGNORED_PACKAGES) setForeground(active)
             // Includes this app itself, so the ⬇ button hides when Abhi Utility opens.
             if (active != "com.android.systemui") {
@@ -671,11 +682,26 @@ class ReelCounterService : AccessibilityService() {
         setOnClickListener { onClick() }
     }
 
+    /** Current screen size in pixels (width, height), following the actual rotation right now. */
+    private fun currentScreenSize(): Pair<Int, Int> {
+        val wm = windowManager ?: getSystemService(WindowManager::class.java)
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                val b = wm.currentWindowMetrics.bounds
+                if (b.width() > 0 && b.height() > 0) return b.width() to b.height()
+            } catch (_: Exception) {
+            }
+        }
+        val p = android.graphics.Point()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealSize(p)
+        return p.x to p.y
+    }
+
     private fun centered() = LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER_HORIZONTAL }
 
     /** 3×4 number pad (digits, ⌫, OK); keys big in portrait, smaller in landscape. */
-    private fun numberPad(landscape: Boolean, onKey: (String) -> Unit): LinearLayout {
-        val screenH = resources.displayMetrics.heightPixels
+    private fun numberPad(landscape: Boolean, screenH: Int, onKey: (String) -> Unit): LinearLayout {
         val key = if (landscape) minOf(dp(64f), (screenH - dp(48f)) / 4 - dp(12f)) else dp(72f)
         val gap = if (landscape) dp(6f) else dp(8f)
         val grid = LinearLayout(this).apply {
@@ -727,7 +753,10 @@ class ReelCounterService : AccessibilityService() {
         val wm = windowManager ?: return
         val rule = lockRules[pkg] ?: return
         val name = AppLock.appLabel(this, pkg)
-        val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        // Use the real screen size: the service's own configuration can still say "portrait"
+        // while a game (e.g. one locked to landscape) has rotated the screen.
+        val (screenW, screenH) = currentScreenSize()
+        val landscape = screenW > screenH
 
         // Scroll view so nothing is ever cut off; the content sits in the middle.
         val container = android.widget.FrameLayout(this)
@@ -784,7 +813,7 @@ class ReelCounterService : AccessibilityService() {
             }
             val cancel = padButton("Cancel", false) { hidePinPad() }
 
-            val grid = numberPad(landscape) { k ->
+            val grid = numberPad(landscape, screenH) { k ->
                 error.text = ""
                 when (k) {
                     "⌫" -> { entered = entered.dropLast(1); render() }
@@ -1086,7 +1115,10 @@ class ReelCounterService : AccessibilityService() {
     private fun showGuard() {
         if (guardView != null) return
         val wm = windowManager ?: return
-        val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        // Use the real screen size: the service's own configuration can still say "portrait"
+        // while a game (e.g. one locked to landscape) has rotated the screen.
+        val (screenW, screenH) = currentScreenSize()
+        val landscape = screenW > screenH
 
         var entered = ""
         val dots = padTitle("", 30f)
@@ -1108,7 +1140,7 @@ class ReelCounterService : AccessibilityService() {
                 }, centered().apply { topMargin = dp(4f) })
             }
         }
-        val grid = numberPad(landscape) { k ->
+        val grid = numberPad(landscape, screenH) { k ->
             error.text = ""
             when (k) {
                 "⌫" -> { entered = entered.dropLast(1); render() }
@@ -1427,6 +1459,8 @@ class ReelCounterService : AccessibilityService() {
         audioManager?.unregisterAudioPlaybackCallback(audioCallback)
         handler.removeCallbacks(pollTask)
         handler.removeCallbacks(tickTask)
+        sos?.destroy()
+        sos = null
         try {
             unregisterReceiver(screenReceiver)
         } catch (_: Exception) {

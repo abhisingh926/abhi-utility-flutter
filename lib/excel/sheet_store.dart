@@ -78,6 +78,32 @@ class SheetStore {
     return SheetFile(name: file.name, source: file.path ?? file.uri.toString());
   }
 
+  static String mimeOf(String name) => switch (name.split('.').last.toLowerCase()) {
+        'csv' => 'text/csv',
+        'xlsm' => 'application/vnd.ms-excel.sheet.macroenabled.12',
+        _ => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      };
+
+  /// Saves over the original when Android allows it; otherwise as a copy in
+  /// Downloads/AbhiUtility. Returns the file to keep editing, and true if it is a new copy.
+  static Future<(SheetFile, bool)> save(SheetFile f, Uint8List bytes) async {
+    try {
+      await channel.invokeMethod('write', {'source': f.source, 'bytes': bytes});
+      return (f, false);
+    } on PlatformException {
+      // Read-only (e.g. opened from WhatsApp / email): keep the original, save a copy.
+    }
+    return (await saveCopy(bytes, f.name), true);
+  }
+
+  /// Writes [bytes] as [name] into Downloads/AbhiUtility and remembers it.
+  static Future<SheetFile> saveCopy(Uint8List bytes, String name) async {
+    final uri = await channel.invokeMethod<String>('saveCopy', {'bytes': bytes, 'name': name, 'mime': mimeOf(name)});
+    final copy = SheetFile(name: await nameOf(uri!), source: uri, size: bytes.length, modified: DateTime.now());
+    await addRecent(copy);
+    return copy;
+  }
+
   /// File name of a content:// uri ("Open with").
   static Future<String> nameOf(String uri) async =>
       await channel.invokeMethod<String>('displayName', {'uri': uri}) ?? 'Spreadsheet';

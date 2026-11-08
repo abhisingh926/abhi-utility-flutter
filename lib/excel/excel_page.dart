@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'sheet_store.dart';
 import 'sheet_viewer.dart';
+import 'sheet_writer.dart';
 
 /// Excel viewer tab: open a file, recently opened files, and every Excel / CSV
 /// file on the phone (after "All files access" is allowed).
@@ -67,6 +68,39 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
     if (f != null && mounted) await _open(f);
   }
 
+  /// Empty .xlsx in Downloads/AbhiUtility, opened ready to type.
+  Future<void> _createNew() async {
+    final now = DateTime.now();
+    final ctl = TextEditingController(
+        text: 'Spreadsheet ${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${now.year}');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New spreadsheet'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'File name', suffixText: '.xlsx'),
+          onSubmitted: (v) => Navigator.pop(context, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, ctl.text), child: const Text('Create')),
+        ],
+      ),
+    );
+    final clean = name?.trim().replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    if (clean == null || clean.isEmpty || !mounted) return;
+    try {
+      final file = await SheetStore.saveCopy(newWorkbook(), clean.toLowerCase().endsWith('.xlsx') ? clean : '$clean.xlsx');
+      if (!mounted) return;
+      await SheetViewer.open(context, file, edit: true);
+      refresh();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create the file: $e')));
+    }
+  }
+
   Future<void> _open(SheetFile f) async {
     await SheetViewer.open(context, f);
     final recent = await SheetStore.recents();
@@ -94,14 +128,29 @@ class ExcelPageState extends State<ExcelPage> with WidgetsBindingObserver {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          FilledButton.icon(
-            onPressed: _pick,
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-            icon: const Icon(Icons.folder_open),
-            label: const Text('Open Excel file'),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _pick,
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('Open file'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  onPressed: _createNew,
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                  icon: const Icon(Icons.add),
+                  label: const Text('New spreadsheet'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 6),
-          Text('Excel (.xlsx, .xlsm) and CSV files. Tip: "Open with → Abhi Utility" works too.',
+          Text('View and edit Excel (.xlsx, .xlsm) and CSV files. "Open with → Abhi Utility" works too.',
               textAlign: TextAlign.center, style: t.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
           const SizedBox(height: 12),
           if (_recent.isNotEmpty || (_all?.isNotEmpty ?? false))
