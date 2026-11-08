@@ -6,6 +6,24 @@ import 'package:in_app_purchase/in_app_purchase.dart';
 
 import 'api_client.dart';
 
+/// How the backend describes a plan (admin panel → Plans). The price on the buy
+/// button always comes from the store; this gives the name, label and order.
+class PlanInfo {
+  PlanInfo.fromJson(Map<String, dynamic> j, this.order)
+      : name = j['name'] as String?,
+        description = j['description'] as String?,
+        badge = j['badge'] as String?,
+        period = j['period'] as String? ?? 'month';
+
+  final String? name, description, badge;
+
+  /// week, month, quarter, half_year or year.
+  final String period;
+
+  /// Position in the backend's list (admin's "Order in app").
+  final int order;
+}
+
 /// Subscriptions: 1-month free trial after registering (given by the backend),
 /// then Pro through Google Play (or the App Store). Every purchase is sent to
 /// the backend, which checks it with Google/Apple and answers with the
@@ -20,8 +38,11 @@ class SubscriptionService {
   /// Free trial length from the backend (`/plans`).
   int trialDays = 30;
 
-  /// Plans from the store, cheapest period first. Empty until [loadProducts].
+  /// Plans from the store, in the backend's order. Empty until [loadProducts].
   final products = ValueNotifier<List<ProductDetails>>(const []);
+
+  /// Backend details per product ID (name, label, description).
+  Map<String, PlanInfo> planInfo = const {};
 
   /// True while a purchase or restore is being checked.
   final busy = ValueNotifier<bool>(false);
@@ -49,9 +70,14 @@ class SubscriptionService {
     try {
       final plans = await ApiClient.instance.publicJson('/api/v1/plans');
       trialDays = (plans['trialDays'] as num?)?.toInt() ?? trialDays;
+      final info = <String, PlanInfo>{};
       for (final p in (plans['products'] as List? ?? const [])) {
-        ids.add((p as Map)['id'] as String);
+        final m = Map<String, dynamic>.from(p as Map);
+        final id = m['id'] as String;
+        ids.add(id);
+        info[id] = PlanInfo.fromJson(m, info.length);
       }
+      planInfo = info;
     } on ApiException catch (e) {
       error.value = e.message;
       return;
@@ -66,7 +92,7 @@ class SubscriptionService {
     // One entry per product (Android lists each offer of a subscription separately).
     final seen = <String>{};
     final list = res.productDetails.where((p) => seen.add(p.id)).toList()
-      ..sort((a, b) => a.rawPrice.compareTo(b.rawPrice));
+      ..sort((a, b) => (planInfo[a.id]?.order ?? 999).compareTo(planInfo[b.id]?.order ?? 999));
     products.value = list;
     if (list.isEmpty && error.value == null) {
       error.value = 'No plans found in the store yet (product IDs: ${ids.join(', ')}).';

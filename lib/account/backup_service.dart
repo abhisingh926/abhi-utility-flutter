@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../diary/journal_store.dart';
 import 'api_client.dart';
+import 'user_scope.dart';
 
 /// One backup as listed by the server.
 class BackupInfo {
@@ -30,10 +31,11 @@ class BackupInfo {
 /// Backs up / restores the diary (journal entries + photos) and tasks.
 ///
 /// Payload: `{ v: 1, prefs: { "journal:<id>": json, "diary:<date>": json }, images: { fileName: sha256 } }`.
+/// Keys in the payload have no account prefix; on the phone they live under the
+/// logged-in account's prefix ([UserScope]), so only that account's data is sent.
 /// Photos are uploaded separately, once each, keyed by SHA-256.
 class BackupService {
   static const _api = '/api/v1/backups';
-  static bool _isOurKey(String k) => k.startsWith('journal:') || k.startsWith('diary:');
 
   static Future<({List<BackupInfo> backups, int usedBytes, int quotaBytes})> list() async {
     final j = await ApiClient.instance.json('GET', _api);
@@ -51,12 +53,15 @@ class BackupService {
     progress?.call('Reading diary and tasks…');
     await JournalStore.all(); // runs the old-notes migration first, if needed
     final prefs = await SharedPreferences.getInstance();
+    final scope = await UserScope.prefix();
 
     final data = <String, String>{};
     var entries = 0, taskDays = 0;
     final imageNames = <String>{};
-    for (final k in prefs.getKeys().where(_isOurKey)) {
-      final v = prefs.getString(k);
+    for (final scoped in prefs.getKeys().where((k) => k.startsWith(scope))) {
+      final k = scoped.substring(scope.length);
+      if (!UserScope.isDataKey(k)) continue;
+      final v = prefs.getString(scoped);
       if (v == null) continue;
       data[k] = v;
       if (k.startsWith('journal:')) {
@@ -163,13 +168,14 @@ class BackupService {
 
     progress?.call('Restoring…');
     final prefs = await SharedPreferences.getInstance();
-    for (final k in prefs.getKeys().where(_isOurKey).toList()) {
+    final scope = await UserScope.prefix();
+    for (final k in prefs.getKeys().where((k) => k.startsWith(scope) && UserScope.isDataKey(k.substring(scope.length))).toList()) {
       await prefs.remove(k);
     }
     for (final e in data.entries) {
-      await prefs.setString(e.key, e.value);
+      if (UserScope.isDataKey(e.key)) await prefs.setString(scope + e.key, e.value);
     }
-    await prefs.setBool('journal_migrated_v1', true);
+    await prefs.setBool(scope + JournalStore.migratedKey, true);
   }
 
   static Future<void> delete(int id) => ApiClient.instance.json('DELETE', '$_api/$id');

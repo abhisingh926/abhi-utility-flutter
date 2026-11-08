@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../account/user_scope.dart';
+
 /// One to-do item.
 class DiaryTask {
   DiaryTask({
@@ -66,9 +68,10 @@ class DiaryDay {
 /// Summary of a day for the calendar.
 enum DayMark { none, entry, allDone }
 
-/// Diary storage: one JSON entry per day in SharedPreferences ("diary:yyyy-MM-dd").
+/// Diary storage: one JSON entry per day in SharedPreferences (`<account>:diary:yyyy-MM-dd`).
+/// Each account on the phone has its own tasks (see [UserScope]).
 class DiaryStore {
-  static const _prefix = 'diary:';
+  static Future<String> _prefix() async => '${await UserScope.prefix()}diary:';
 
   static String key(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -77,24 +80,25 @@ class DiaryStore {
 
   static Future<DiaryDay> load(DateTime day) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefix + key(day));
+    final raw = prefs.getString(await _prefix() + key(day));
     if (raw == null) return DiaryDay();
     return DiaryDay.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
   static Future<void> save(DateTime day, DiaryDay data) async {
     final prefs = await SharedPreferences.getInstance();
+    final k = await _prefix() + key(day);
     if (data.isEmpty) {
-      await prefs.remove(_prefix + key(day));
+      await prefs.remove(k);
     } else {
-      await prefs.setString(_prefix + key(day), jsonEncode(data.toJson()));
+      await prefs.setString(k, jsonEncode(data.toJson()));
     }
   }
 
   /// Marks for every day of [month] that has something written.
   static Future<Map<int, DayMark>> monthMarks(DateTime month) async {
     final prefs = await SharedPreferences.getInstance();
-    final prefix = '$_prefix${key(DateTime(month.year, month.month, 1)).substring(0, 8)}';
+    final prefix = '${await _prefix()}${key(DateTime(month.year, month.month, 1)).substring(0, 8)}';
     final marks = <int, DayMark>{};
     for (final k in prefs.getKeys().where((k) => k.startsWith(prefix))) {
       final day = int.tryParse(k.substring(prefix.length));
@@ -110,11 +114,12 @@ class DiaryStore {
   /// Unfinished tasks scheduled on days after [day], soonest first (then by time).
   static Future<List<({DateTime date, DiaryTask task})>> upcoming(DateTime day) async {
     final prefs = await SharedPreferences.getInstance();
-    final afterKey = _prefix + key(day);
+    final p = await _prefix();
+    final afterKey = p + key(day);
     final result = <({DateTime date, DiaryTask task})>[];
     for (final k in prefs.getKeys()) {
-      if (!k.startsWith(_prefix) || k.compareTo(afterKey) <= 0) continue;
-      final date = DateTime.tryParse(k.substring(_prefix.length));
+      if (!k.startsWith(p) || k.compareTo(afterKey) <= 0) continue;
+      final date = DateTime.tryParse(k.substring(p.length));
       final raw = prefs.getString(k);
       if (date == null || raw == null) continue;
       final d = DiaryDay.fromJson(jsonDecode(raw) as Map<String, dynamic>);

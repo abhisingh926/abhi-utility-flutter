@@ -151,6 +151,7 @@ class _HomeShellState extends State<HomeShell> {
     // Leaving the app locks App Lock + Diary (not for the photo picker / our own system screens).
     _lifecycle = AppLifecycleListener(onResume: _refreshAccount, onPause: DiaryLock.onAppPaused);
     AccountPage.restoredVersion.addListener(_onRestored);
+    ApiClient.instance.user.addListener(_onUserChanged);
     // Opened from the daily reel report notification -> show the Reels tab.
     const MethodChannel('abhi_utility/reels').invokeMethod<String>('initialTab').then((tab) {
       if (tab == 'reels' && mounted) setState(() => _tab = _reelsTab);
@@ -252,9 +253,27 @@ class _HomeShellState extends State<HomeShell> {
     _homeKey.currentState?.refresh();
   }
 
+  /// Diary and tasks belong to an account: another login (or logout) shows other data.
+  int? _userId;
+  bool _userKnown = false;
+
+  void _onUserChanged() {
+    final id = ApiClient.instance.user.value?.id;
+    if (!_userKnown) {
+      // First value from the saved login: nothing to reload yet.
+      _userKnown = true;
+      _userId = id;
+      return;
+    }
+    if (id == _userId) return;
+    _userId = id;
+    _onRestored();
+  }
+
   @override
   void dispose() {
     AccountPage.restoredVersion.removeListener(_onRestored);
+    ApiClient.instance.user.removeListener(_onUserChanged);
     _lifecycle.dispose();
     super.dispose();
   }

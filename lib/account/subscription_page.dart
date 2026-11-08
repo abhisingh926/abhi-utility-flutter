@@ -270,7 +270,7 @@ class _PaywallViewState extends State<PaywallView> {
     }
     return [
       for (final p in list) ...[
-        _PlanTile(product: p, enabled: !_subs.busy.value, onBuy: () => _subs.buy(p)),
+        _PlanTile(product: p, info: _subs.planInfo[p.id], enabled: !_subs.busy.value, onBuy: () => _subs.buy(p)),
         const SizedBox(height: 10),
       ],
       if (_subs.busy.value) const LinearProgressIndicator(),
@@ -279,22 +279,42 @@ class _PaywallViewState extends State<PaywallView> {
 }
 
 class _PlanTile extends StatelessWidget {
-  const _PlanTile({required this.product, required this.enabled, required this.onBuy});
+  const _PlanTile({required this.product, required this.info, required this.enabled, required this.onBuy});
   final ProductDetails product;
+
+  /// Name, label and description from the backend (null: older backend).
+  final PlanInfo? info;
   final bool enabled;
   final VoidCallback onBuy;
 
   @override
   Widget build(BuildContext context) {
-    final yearly = product.id.contains('year');
+    final period = info?.period ?? (product.id.contains('year') ? 'year' : 'month');
+    final long = period == 'year' || period == 'half_year';
+    final badge = info?.badge ?? (info == null && long ? 'Best value' : null);
+    final name = info?.name ?? (period == 'year' ? 'Yearly' : 'Monthly');
+    final description = info?.description ?? (info == null ? (long ? 'Best value' : 'Cancel any time') : null);
     final scheme = Theme.of(context).colorScheme;
     return Card(
-      color: yearly ? scheme.primaryContainer : null,
+      // Highlighted when the admin gave it a label (e.g. "Best value").
+      color: badge != null ? scheme.primaryContainer : null,
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        leading: Icon(yearly ? Icons.calendar_month : Icons.calendar_today),
-        title: Text(yearly ? 'Yearly' : 'Monthly', style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(yearly ? 'Best value' : 'Cancel any time'),
+        leading: Icon(long ? Icons.calendar_month : Icons.calendar_today),
+        title: Row(
+          children: [
+            Flexible(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold))),
+            if (badge != null && info != null) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(color: scheme.primary, borderRadius: BorderRadius.circular(10)),
+                child: Text(badge, style: TextStyle(color: scheme.onPrimary, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ],
+        ),
+        subtitle: description == null ? null : Text(description),
         trailing: FilledButton(onPressed: enabled ? onBuy : null, child: Text(product.price)),
         onTap: enabled ? onBuy : null,
       ),

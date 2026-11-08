@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../account/user_scope.dart';
 import 'diary_store.dart';
 
 /// One diary (journal) entry: text, mood and photos.
@@ -42,11 +43,12 @@ class JournalEntry {
       };
 }
 
-/// Diary entries in SharedPreferences (key `journal:<id>`); photos as files in the
-/// app's private folder (kept even if deleted from the gallery).
+/// Diary entries in SharedPreferences (key `<account>:journal:<id>`, see [UserScope]);
+/// photos as files in the app's private folder (kept even if deleted from the gallery).
+/// Photo file names are unique, and only the account's own entries point to them.
 class JournalStore {
-  static const _prefix = 'journal:';
-  static const _migratedKey = 'journal_migrated_v1';
+  static const _kind = 'journal:';
+  static const migratedKey = 'journal_migrated_v1';
   static Directory? _dir;
 
   static Future<Directory> imagesDir() async {
@@ -73,9 +75,10 @@ class JournalStore {
   /// All entries, newest first.
   static Future<List<JournalEntry>> all() async {
     final prefs = await SharedPreferences.getInstance();
-    await _migrateOldNotes(prefs);
+    final scope = await UserScope.prefix();
+    await _migrateOldNotes(prefs, scope);
     final entries = [
-      for (final k in prefs.getKeys().where((k) => k.startsWith(_prefix)))
+      for (final k in prefs.getKeys().where((k) => k.startsWith(scope + _kind)))
         JournalEntry.fromJson(jsonDecode(prefs.getString(k)!) as Map<String, dynamic>),
     ]..sort((a, b) => b.date.compareTo(a.date));
     return entries;
@@ -83,34 +86,35 @@ class JournalStore {
 
   static Future<void> save(JournalEntry e) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefix + e.id, jsonEncode(e.toJson()));
+    await prefs.setString(await UserScope.prefix() + _kind + e.id, jsonEncode(e.toJson()));
   }
 
   /// Deletes the entry and its photos.
   static Future<void> delete(JournalEntry e) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefix + e.id);
+    await prefs.remove(await UserScope.prefix() + _kind + e.id);
     for (final img in e.images) {
       await deleteImage(img);
     }
   }
 
   /// Diary notes used to live inside each day's tasks; move them into entries once.
-  static Future<void> _migrateOldNotes(SharedPreferences prefs) async {
-    if (prefs.getBool(_migratedKey) ?? false) return;
-    for (final k in prefs.getKeys().where((k) => k.startsWith('diary:')).toList()) {
+  static Future<void> _migrateOldNotes(SharedPreferences prefs, String scope) async {
+    if (prefs.getBool(scope + migratedKey) ?? false) return;
+    final diary = '${scope}diary:';
+    for (final k in prefs.getKeys().where((k) => k.startsWith(diary)).toList()) {
       final raw = prefs.getString(k);
       if (raw == null) continue;
       final day = DiaryDay.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       if (day.note.trim().isEmpty && day.mood == null) continue;
-      final date = DateTime.parse(k.substring('diary:'.length));
+      final date = DateTime.parse(k.substring(diary.length));
       final entry = JournalEntry(
         id: 'm${date.millisecondsSinceEpoch}',
         date: DateTime(date.year, date.month, date.day, 21),
         text: day.note,
         mood: day.mood,
       );
-      await prefs.setString(_prefix + entry.id, jsonEncode(entry.toJson()));
+      await prefs.setString(scope + _kind + entry.id, jsonEncode(entry.toJson()));
       day.note = '';
       day.mood = null;
       if (day.isEmpty) {
@@ -119,6 +123,6 @@ class JournalStore {
         await prefs.setString(k, jsonEncode(day.toJson()));
       }
     }
-    await prefs.setBool(_migratedKey, true);
+    await prefs.setBool(scope + migratedKey, true);
   }
 }
