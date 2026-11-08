@@ -59,6 +59,10 @@ import java.util.Date
 class ReelCounterService : AccessibilityService() {
 
     companion object {
+        /** The running service (for FingerprintActivity). */
+        @Volatile
+        var instance: ReelCounterService? = null
+
         private const val TAG = "ReelCounter"
         private const val REPORT_CHANNEL = "reel_report"
         private const val YOUTUBE = "com.google.android.youtube"
@@ -275,6 +279,7 @@ class ReelCounterService : AccessibilityService() {
 
     override fun onServiceConnected() {
         Log.d(TAG, "service connected")
+        instance = this
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -571,57 +576,86 @@ class ReelCounterService : AccessibilityService() {
 
     // ---- Password pad + extra time ----------------------------------------------------
 
-    /** Full-screen number pad; after the right password, choose how much time to add. */
-    private fun showPinPad(pkg: String, fromLockScreen: Boolean) {
+    private fun padTitle(text: String, sizeSp: Float, alpha: Int = 255) = TextView(this).apply {
+        this.text = text
+        setTextColor(Color.argb(alpha, 255, 255, 255))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+        gravity = Gravity.CENTER
+    }
+
+    private fun padButton(text: String, filled: Boolean, onClick: () -> Unit) = Button(this).apply {
+        this.text = text
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        setTextColor(if (filled) Color.BLACK else Color.WHITE)
+        background = GradientDrawable().apply {
+            cornerRadius = dp(24f).toFloat()
+            if (filled) setColor(Color.rgb(0, 210, 255))
+            else { setColor(Color.TRANSPARENT); setStroke(dp(1f), Color.argb(120, 255, 255, 255)) }
+        }
+        setPadding(dp(24f), dp(10f), dp(24f), dp(10f))
+        setOnClickListener { onClick() }
+    }
+
+    private fun centered() = LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER_HORIZONTAL }
+
+    /** Fingerprint (strong biometric) set up on this phone and allowed in App Lock settings. */
+    private fun fingerprintUsable(): Boolean {
+        if (!AppLock.fingerprintEnabled(this)) return false
+        val bm = getSystemService(android.hardware.biometrics.BiometricManager::class.java) ?: return false
+        return if (Build.VERSION.SDK_INT >= 30) {
+            bm.canAuthenticate(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+                android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            bm.canAuthenticate() == android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        }
+    }
+
+    /**
+     * Full-screen number pad, centered, scrollable, side by side in landscape.
+     * After the right password (or fingerprint: [verified]) choose how much time to add.
+     */
+    private fun showPinPad(pkg: String, fromLockScreen: Boolean, verified: Boolean = false) {
         hidePinPad()
         val wm = windowManager ?: return
         val rule = lockRules[pkg] ?: return
         val name = AppLock.appLabel(this, pkg)
+        val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(32f), dp(32f), dp(32f), dp(32f))
+        // Scroll view so nothing is ever cut off; the content sits in the middle.
+        val container = android.widget.FrameLayout(this)
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = true
             setBackgroundColor(Color.rgb(12, 14, 40))
+            addView(container, android.widget.FrameLayout.LayoutParams(-1, -2))
         }
-        fun title(text: String, sizeSp: Float, alpha: Int = 255) = TextView(this).apply {
-            this.text = text
-            setTextColor(Color.argb(alpha, 255, 255, 255))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-            gravity = Gravity.CENTER
-        }
-        fun pillButton(text: String, filled: Boolean, onClick: () -> Unit) = Button(this).apply {
-            this.text = text
-            isAllCaps = false
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            setTextColor(if (filled) Color.BLACK else Color.WHITE)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(24f).toFloat()
-                if (filled) setColor(Color.rgb(0, 210, 255))
-                else { setColor(Color.TRANSPARENT); setStroke(dp(1f), Color.argb(120, 255, 255, 255)) }
-            }
-            setOnClickListener { onClick() }
+        fun setContent(v: View) {
+            container.removeAllViews()
+            container.addView(v, android.widget.FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         }
 
-        if (!AppLock.hasPin(this)) {
-            root.addView(title("No password set", 22f))
-            root.addView(title("\nSet a password in Abhi Utility → App Lock to give extra time.\n", 15f, 200))
-            root.addView(pillButton("OK", true) { hidePinPad() })
+        if (verified) {
+            setContent(timeOptions(pkg, rule, name, "✅ Fingerprint recognised"))
+        } else if (!AppLock.hasPin(this)) {
+            setContent(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(32f), dp(32f), dp(32f), dp(32f))
+                addView(padTitle("No password set", 22f), centered())
+                addView(padTitle("\nSet a password in Abhi Utility → App Lock to give extra time.\n", 15f, 200), centered())
+                addView(padButton("OK", true) { hidePinPad() }, centered())
+            })
         } else {
             var entered = ""
-            val dots = title("", 30f)
-            val error = title("", 14f).apply { setTextColor(Color.rgb(255, 110, 110)) }
+            val dots = padTitle("", 30f)
+            val error = padTitle("", 14f).apply { setTextColor(Color.rgb(255, 110, 110)) }
             fun render() { dots.text = if (entered.isEmpty()) "– – – –" else "● ".repeat(entered.length).trim() }
             render()
 
-            root.addView(title("🔑 Enter password", 22f))
-            root.addView(title("to give $name more time", 15f, 200))
-            root.addView(dots, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(20f) })
-            root.addView(error, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(12f) })
-
             fun onOk() {
                 if (AppLock.checkPin(this, entered)) {
-                    showTimeOptions(root, pkg, rule, name, ::title, ::pillButton)
+                    setContent(timeOptions(pkg, rule, name, "✅ Password correct"))
                 } else {
                     entered = ""
                     error.text = "Wrong password"
@@ -629,15 +663,40 @@ class ReelCounterService : AccessibilityService() {
                 }
             }
 
-            val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK")
-            val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            keys.chunked(3).forEach { rowKeys ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            // Title, dots, error message and the fingerprint button.
+            val info = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                addView(padTitle("🔑 Enter password", 22f), centered())
+                addView(padTitle("to give $name more time", 15f, 200), centered())
+                addView(dots, centered().apply { topMargin = dp(16f) })
+                addView(error, centered().apply { bottomMargin = dp(8f) })
+                if (fingerprintUsable()) {
+                    addView(padButton("👆 Use fingerprint", false) { startFingerprint(pkg, name) },
+                        centered().apply { topMargin = dp(4f) })
+                }
+            }
+            val cancel = padButton("Cancel", false) { hidePinPad() }
+
+            // Keys sized to fit: big in portrait, smaller in landscape.
+            val screenH = resources.displayMetrics.heightPixels
+            val key = if (landscape) minOf(dp(64f), (screenH - dp(48f)) / 4 - dp(12f)) else dp(72f)
+            val gap = if (landscape) dp(6f) else dp(8f)
+            val grid = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK").chunked(3).forEach { rowKeys ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                }
                 rowKeys.forEach { k ->
                     row.addView(Button(this).apply {
                         text = k
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, if (landscape) 18f else 22f)
                         setTextColor(if (k == "OK") Color.BLACK else Color.WHITE)
+                        setPadding(0, 0, 0, 0)
                         background = GradientDrawable().apply {
                             shape = GradientDrawable.OVAL
                             setColor(if (k == "OK") Color.rgb(0, 210, 255) else Color.argb(40, 255, 255, 255))
@@ -651,13 +710,35 @@ class ReelCounterService : AccessibilityService() {
                             }
                             render()
                         }
-                    }, LinearLayout.LayoutParams(dp(72f), dp(72f)).apply { setMargins(dp(10f), dp(8f), dp(10f), dp(8f)) })
+                    }, LinearLayout.LayoutParams(key, key).apply { setMargins(gap * 2, gap, gap * 2, gap) })
                 }
-                grid.addView(row)
+                grid.addView(row, centered())
             }
-            root.addView(grid)
-            root.addView(pillButton("Cancel", false) { hidePinPad() },
-                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(20f) })
+
+            setContent(if (landscape) {
+                // Side by side: info + cancel on the left, keypad on the right.
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    setPadding(dp(24f), dp(12f), dp(24f), dp(12f))
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        addView(info, centered())
+                        addView(cancel, centered().apply { topMargin = dp(12f) })
+                    }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(40f); gravity = Gravity.CENTER_VERTICAL })
+                    addView(grid, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER_VERTICAL })
+                }
+            } else {
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setPadding(dp(24f), dp(32f), dp(24f), dp(32f))
+                    addView(info, centered())
+                    addView(grid, centered().apply { topMargin = dp(8f) })
+                    addView(cancel, centered().apply { topMargin = dp(20f) })
+                }
+            })
         }
 
         val params = WindowManager.LayoutParams(
@@ -668,37 +749,37 @@ class ReelCounterService : AccessibilityService() {
             PixelFormat.OPAQUE
         )
         try {
-            wm.addView(root, params)
-            pinView = root
+            wm.addView(scroll, params)
+            pinView = scroll
             hideCountdown()
         } catch (e: Exception) {
             Log.w(TAG, "Could not show password pad", e)
         }
     }
 
-    private fun showTimeOptions(
-        root: LinearLayout,
-        pkg: String,
-        rule: AppLock.Rule,
-        name: String,
-        title: (String, Float, Int) -> TextView,
-        pillButton: (String, Boolean, () -> Unit) -> Button,
-    ) {
-        root.removeAllViews()
-        root.addView(title("✅ Password correct", 22f, 255))
-        root.addView(title("How much more time for $name?", 16f, 200),
-            LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f); bottomMargin = dp(24f) })
-        listOf(5, 10, 15, 30, 60).forEach { min ->
-            root.addView(pillButton(if (min == 60) "+1 hour" else "+$min min", true) {
-                AppLock.addBonus(this, pkg, rule, min * 60)
-                Log.d(TAG, "added $min min for $pkg")
-                hidePinPad()
-                checkLock() // unlocks right away
-            }, LinearLayout.LayoutParams(dp(220f), -2).apply { setMargins(0, dp(6f), 0, dp(6f)) })
+    /** "How much more time?" buttons (centered column). */
+    private fun timeOptions(pkg: String, rule: AppLock.Rule, name: String, heading: String): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24f), dp(24f), dp(24f), dp(24f))
+            addView(padTitle(heading, 22f), centered())
+            addView(padTitle("How much more time for $name?", 16f, 200),
+                centered().apply { topMargin = dp(8f); bottomMargin = dp(20f) })
+            listOf(5, 10, 15, 30, 60).forEach { min ->
+                addView(padButton(if (min == 60) "+1 hour" else "+$min min", true) {
+                    AppLock.addBonus(this@ReelCounterService, pkg, rule, min * 60)
+                    Log.d(TAG, "added $min min for $pkg")
+                    hidePinPad()
+                    checkLock() // unlocks right away
+                }, LinearLayout.LayoutParams(dp(220f), -2).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setMargins(0, dp(5f), 0, dp(5f))
+                })
+            }
+            addView(padButton("Cancel", false) { hidePinPad() },
+                LinearLayout.LayoutParams(dp(220f), -2).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(14f) })
         }
-        root.addView(pillButton("Cancel", false) { hidePinPad() },
-            LinearLayout.LayoutParams(dp(220f), -2).apply { topMargin = dp(18f) })
-    }
 
     private fun hidePinPad() {
         pinView?.let {
@@ -708,6 +789,49 @@ class ReelCounterService : AccessibilityService() {
             }
         }
         pinView = null
+    }
+
+    // ---- Fingerprint (FingerprintActivity: the system prompt needs an activity) --------
+
+    private var fingerprintPkg: String? = null
+    private val fingerprintTimeout = Runnable { onFingerprintResult(fingerprintPkg ?: "", false) }
+
+    private fun startFingerprint(pkg: String, name: String) {
+        fingerprintPkg = pkg
+        setOverlaysHidden(true) // the prompt must be visible and tappable
+        handler.postDelayed(fingerprintTimeout, 90_000) // never leave the app unlocked by accident
+        startActivity(
+            Intent(this, FingerprintActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                .putExtra(FingerprintActivity.EXTRA_PKG, pkg)
+                .putExtra(FingerprintActivity.EXTRA_APP_NAME, name)
+        )
+    }
+
+    /** Called by FingerprintActivity when the prompt ends. */
+    fun onFingerprintResult(pkg: String, success: Boolean) {
+        handler.removeCallbacks(fingerprintTimeout)
+        val expected = fingerprintPkg
+        fingerprintPkg = null
+        setOverlaysHidden(false)
+        if (success && pkg == expected && pkg == fgPkg) {
+            showPinPad(pkg, fromLockScreen = true, verified = true)
+        }
+    }
+
+    /** Hides the lock screen + pad while the fingerprint prompt is shown (and lets touches through). */
+    private fun setOverlaysHidden(hidden: Boolean) {
+        val wm = windowManager ?: return
+        for (v in listOfNotNull(pinView, blockView)) {
+            val lp = v.layoutParams as? WindowManager.LayoutParams ?: continue
+            v.visibility = if (hidden) View.GONE else View.VISIBLE
+            lp.flags = if (hidden) lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            else lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            try {
+                wm.updateViewLayout(v, lp)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun showBlockScreen(pkg: String, rule: AppLock.Rule, status: AppLock.Status) {
@@ -1049,6 +1173,8 @@ class ReelCounterService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        if (instance === this) instance = null
+        handler.removeCallbacks(fingerprintTimeout)
         saveTime()
         hideOverlay()
         hideBlockScreen()

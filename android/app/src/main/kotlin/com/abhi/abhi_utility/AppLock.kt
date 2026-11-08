@@ -46,6 +46,16 @@ object AppLock {
     private const val KEY_PIN_SALT = "pin_salt"
     private const val KEY_BONUS = "bonus"
 
+    private const val KEY_FINGERPRINT = "fingerprint"
+
+    /** Fingerprint may be used instead of the password to give extra time (default on). */
+    fun fingerprintEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FINGERPRINT, true)
+
+    fun setFingerprintEnabled(context: Context, on: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_FINGERPRINT, on).apply()
+    }
+
     fun hasPin(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).contains(KEY_PIN_HASH)
 

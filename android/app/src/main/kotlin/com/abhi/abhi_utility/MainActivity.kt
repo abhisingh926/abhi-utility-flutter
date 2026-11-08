@@ -139,6 +139,11 @@ class MainActivity : FlutterFragmentActivity() {
                     result.success(null)
                 }
                 "hasPin" -> result.success(AppLock.hasPin(this))
+                "fingerprintEnabled" -> result.success(AppLock.fingerprintEnabled(this))
+                "setFingerprintEnabled" -> {
+                    AppLock.setFingerprintEnabled(this, call.argument<Boolean>("on") ?: true)
+                    result.success(null)
+                }
                 "checkPin" -> result.success(AppLock.checkPin(this, call.argument<String>("pin") ?: ""))
                 "setPin" -> {
                     // Changing an existing password needs the current one.

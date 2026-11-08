@@ -87,6 +87,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
 
   /// Password gate: the tab asks for the password before showing or changing locks.
   bool _hasPin = false;
+  bool _fingerprint = true;
   bool _unlocked = false;
   List<LockRule> _rules = [];
   List<InstalledApp>? _apps;
@@ -114,9 +115,11 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       final enabled = await _reels.invokeMethod<bool>('isEnabled') ?? false;
       final hasPin = await _channel.invokeMethod<bool>('hasPin') ?? false;
       final raw = await _channel.invokeListMethod<Map>('rules') ?? [];
+      final fingerprint = await _channel.invokeMethod<bool>('fingerprintEnabled') ?? true;
       if (!mounted) return;
       setState(() {
         _hasPin = hasPin;
+        _fingerprint = fingerprint;
         _serviceEnabled = enabled;
         _rules = raw.map(LockRule.fromMap).toList()..sort((a, b) => a.label.compareTo(b.label));
         _loading = false;
@@ -332,6 +335,18 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
                 subtitle: const Text('Instagram, Facebook, YouTube, Snapchat, WhatsApp… in one go'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _addApps(filter: AppFilter.social, selectAll: true),
+              ),
+            ),
+            Card(
+              child: SwitchListTile(
+                secondary: const CircleAvatar(child: Icon(Icons.fingerprint)),
+                title: const Text('Fingerprint for extra time'),
+                subtitle: const Text('Use your fingerprint instead of the password when a locked app asks'),
+                value: _fingerprint,
+                onChanged: (on) async {
+                  setState(() => _fingerprint = on);
+                  await _channel.invokeMethod('setFingerprintEnabled', {'on': on});
+                },
               ),
             ),
             if (_rules.isEmpty)

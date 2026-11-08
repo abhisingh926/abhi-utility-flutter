@@ -45,6 +45,15 @@
                 <data android:scheme="file" android:mimeType="application/pdf"/>
             </intent-filter>
         </activity>
+        <!-- System fingerprint prompt for App Lock extra time (opened by ReelCounterService). -->
+        <activity
+            android:name=".FingerprintActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.NoActionBar"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout"/>
         <!-- Quick download panel over the current app (⬇ button / "Share → Abhi Utility"). -->
         <activity
             android:name=".QuickDownloadActivity"
