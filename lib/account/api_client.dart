@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -125,6 +126,12 @@ class ApiClient {
   static const _kEntitlement = 'account:entitlement';
   static const _kOffline = 'account:offline';
   static const _kOfflineSince = 'account:offlineSince';
+  static const _kEntitlementChecked = 'account:entitlementCheckedAt';
+  static const _kLastSeen = 'account:lastSeen';
+
+  /// The saved Pro status is trusted this long without reaching the server
+  /// (a refund or cancellation shows up at the next check).
+  static const entitlementGraceDays = 14;
 
   /// How long the app may be used without the server (before it is live).
   static const offlineDays = 30;
@@ -143,18 +150,46 @@ class ApiClient {
   final offlineMode = ValueNotifier<bool>(false);
   DateTime? _offlineSince;
 
-  /// Offline use is allowed for [offlineDays] from the first time it was chosen.
+  /// When the app was first installed (Android keeps this through "Clear data").
+  DateTime? _installedAt;
+
+  /// Latest time this app has seen: the clock going back means someone turned
+  /// it back to stretch the trial / offline days.
+  DateTime? _lastSeen;
+  DateTime? _entitlementCheckedAt;
+
+  bool get _clockTurnedBack =>
+      _lastSeen != null && DateTime.now().isBefore(_lastSeen!.subtract(const Duration(hours: 1)));
+
+  /// Offline days count from the first install (or the first offline use, if
+  /// earlier), so clearing the app's data doesn't give 30 new days.
+  DateTime? get _offlineStart {
+    final a = _installedAt, b = _offlineSince;
+    if (a == null) return b;
+    if (b == null) return a;
+    return a.isBefore(b) ? a : b;
+  }
+
+  /// Offline use is allowed for [offlineDays] after [_offlineStart].
   bool get offlineAccess =>
       offlineMode.value &&
-      _offlineSince != null &&
-      DateTime.now().difference(_offlineSince!).inDays < offlineDays;
+      _offlineStart != null &&
+      !_clockTurnedBack &&
+      DateTime.now().difference(_offlineStart!).inDays < offlineDays;
 
-  int get offlineDaysLeft => _offlineSince == null
+  int get offlineDaysLeft => _offlineStart == null
       ? offlineDays
-      : (offlineDays - DateTime.now().difference(_offlineSince!).inDays).clamp(0, offlineDays);
+      : (offlineDays - DateTime.now().difference(_offlineStart!).inDays).clamp(0, offlineDays);
+
+  /// The saved status was confirmed by the server recently enough.
+  bool get _entitlementFresh =>
+      _entitlementCheckedAt != null &&
+      DateTime.now().difference(_entitlementCheckedAt!).inDays < entitlementGraceDays;
 
   /// May the features be used right now?
-  bool get hasAccess => (isLoggedIn && (entitlement.value?.active ?? false)) || offlineAccess;
+  bool get hasAccess =>
+      (isLoggedIn && (entitlement.value?.active ?? false) && _entitlementFresh && !_clockTurnedBack) ||
+      offlineAccess;
 
   /// Use the app without the server (it isn't live yet). Sync later.
   Future<void> startOffline() async {
@@ -190,6 +225,22 @@ class ApiClient {
     _refresh = prefs.getString(_kRefresh);
     _offlineSince = DateTime.tryParse(prefs.getString(_kOfflineSince) ?? '');
     offlineMode.value = prefs.getBool(_kOffline) ?? false;
+    try {
+      final ms = await const MethodChannel('abhi_utility/app').invokeMethod<int>('firstInstallTime');
+      if (ms != null) _installedAt = DateTime.fromMillisecondsSinceEpoch(ms);
+    } catch (_) {/* not on Android (tests): use offlineSince */}
+    _lastSeen = DateTime.tryParse(prefs.getString(_kLastSeen) ?? '');
+    final now = DateTime.now();
+    if (_lastSeen == null || now.isAfter(_lastSeen!)) {
+      _lastSeen = now;
+      await prefs.setString(_kLastSeen, now.toIso8601String());
+    }
+    _entitlementCheckedAt = DateTime.tryParse(prefs.getString(_kEntitlementChecked) ?? '');
+    if (_entitlementCheckedAt == null && prefs.containsKey(_kEntitlement)) {
+      // Saved before this check existed: give it one grace period.
+      _entitlementCheckedAt = now;
+      await prefs.setString(_kEntitlementChecked, now.toIso8601String());
+    }
     final raw = prefs.getString(_kUser);
     if (_refresh != null && raw != null) {
       user.value = AccountUser.fromJson(jsonDecode(raw) as Map<String, dynamic>);
@@ -223,6 +274,14 @@ class ApiClient {
     final e = Entitlement.fromJson(j);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kEntitlement, jsonEncode(e.toJson()));
+    // Fresh from the server: a correct clock and a confirmed status.
+    final now = DateTime.now();
+    _entitlementCheckedAt = now;
+    await prefs.setString(_kEntitlementChecked, now.toIso8601String());
+    if (_lastSeen == null || now.isAfter(_lastSeen!)) {
+      _lastSeen = now;
+      await prefs.setString(_kLastSeen, now.toIso8601String());
+    }
     entitlement.value = e;
   }
 
@@ -247,6 +306,8 @@ class ApiClient {
     await prefs.remove(_kRefresh);
     await prefs.remove(_kUser);
     await prefs.remove(_kEntitlement);
+    await prefs.remove(_kEntitlementChecked);
+    _entitlementCheckedAt = null;
     _access = null;
     _refresh = null;
     user.value = null;
@@ -339,16 +400,28 @@ class ApiClient {
     }
   }
 
-  Future<bool> _refreshTokens() async {
-    if (_refresh == null) return false;
+  /// The refresh in progress: requests that hit 401 at the same time wait for
+  /// it instead of sending the (rotated, now invalid) refresh token again.
+  Future<_Refresh>? _refreshing;
+
+  Future<_Refresh> _refreshTokens() {
+    return _refreshing ??= _doRefresh().whenComplete(() => _refreshing = null);
+  }
+
+  Future<_Refresh> _doRefresh() async {
+    final token = _refresh;
+    if (token == null) return _Refresh.rejected;
     try {
-      final j = await _send('POST', '/api/v1/auth/refresh', body: {'refreshToken': _refresh}, auth: false);
+      final j = await _send('POST', '/api/v1/auth/refresh', body: {'refreshToken': token}, auth: false);
       await _saveSession(j);
-      return true;
+      return _Refresh.ok;
     } on ApiException catch (e) {
       // Refresh token revoked/expired or account disabled -> logged out.
-      if (e.status == 401 || e.status == 403) await _clearSession();
-      return false;
+      if (e.status == 401 || e.status == 403) {
+        if (_refresh == token) await _clearSession(); // not if a newer login happened meanwhile
+        return _Refresh.rejected;
+      }
+      return _Refresh.failed; // no connection / server error: stay logged in
     }
   }
 
@@ -380,6 +453,7 @@ class ApiClient {
   Future<http.Response> _authed(Future<http.Response> Function() call) async {
     await load();
     if (_refresh == null) throw ApiException(401, 'not_logged_in', 'Please log in first');
+    final sentWith = _access; // the token this request is sent with
     http.Response res;
     try {
       res = await call();
@@ -388,8 +462,24 @@ class ApiClient {
     } catch (_) {
       throw ApiException(0, 'server_offline', _offlineMessage); // no connection
     }
-    if (res.statusCode == 401 && await _refreshTokens()) res = await call();
-    if (res.statusCode == 401) await _clearSession();
+    if (res.statusCode == 401) {
+      // Another request may already have refreshed while this one was on its way.
+      final r = _refreshing != null || sentWith == _access ? await _refreshTokens() : _Refresh.ok;
+      switch (r) {
+        case _Refresh.ok:
+          try {
+            res = await call();
+          } catch (_) {
+            throw ApiException(0, 'server_offline', _offlineMessage);
+          }
+          if (res.statusCode == 401) await _clearSession(); // even a fresh token is refused
+        case _Refresh.failed:
+          // Couldn't renew the session right now (network / server): keep it.
+          throw ApiException(0, 'server_offline', _offlineMessage);
+        case _Refresh.rejected:
+          break; // logged out by _doRefresh
+      }
+    }
     return res;
   }
 
@@ -433,3 +523,5 @@ class ApiClient {
     }
   }
 }
+
+enum _Refresh { ok, failed, rejected }

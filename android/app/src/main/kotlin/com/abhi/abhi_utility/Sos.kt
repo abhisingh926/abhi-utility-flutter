@@ -54,6 +54,9 @@ object Sos {
     /** Broadcast of the notification's "Stop SOS" button. */
     const val ACTION_STOP = "com.abhi.abhi_utility.SOS_STOP"
 
+    /** Signature permission (AndroidManifest.xml) guarding [ACTION_STOP] before Android 13. */
+    const val STOP_PERMISSION = "com.abhi.abhi_utility.permission.SOS_CONTROL"
+
     /** Call, see when a call ends, and read the call log to know if it was answered. */
     val PERMISSIONS = arrayOf(
         Manifest.permission.CALL_PHONE,
@@ -145,7 +148,7 @@ object Sos {
 }
 
 /**
- * Lock-screen part of SOS: an invisible strip in the middle of the lock screen where
+ * Lock-screen part of SOS: an invisible strip at the top of the lock screen (clock area) where
  * the "S" is drawn, and the calls (each contact in turn, [ROUNDS] times through the
  * list, until one answers).
  */
@@ -198,8 +201,13 @@ class SosController(private val service: AccessibilityService) {
 
     init {
         val filter = IntentFilter(Sos.ACTION_STOP)
-        if (Build.VERSION.SDK_INT >= 33) service.registerReceiver(stopReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else service.registerReceiver(stopReceiver, filter)
+        if (Build.VERSION.SDK_INT >= 33) {
+            service.registerReceiver(stopReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            // Android 10-12: dynamic receivers are exported. Only senders holding our
+            // signature permission (= Abhi Utility itself) may stop an emergency call.
+            service.registerReceiver(stopReceiver, filter, Sos.STOP_PERMISSION, null)
+        }
         refresh()
     }
 
@@ -244,7 +252,7 @@ class SosController(private val service: AccessibilityService) {
         val view = DrawView()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            (screenH * 0.45f).toInt(),
+            (screenH * 0.24f).toInt(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -252,7 +260,9 @@ class SosController(private val service: AccessibilityService) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP
-            y = (screenH * 0.2f).toInt() // middle of the screen; the bottom stays free for unlocking
+            // Upper part of the lock screen (around the clock): no buttons there. The
+            // PIN/pattern pad and the notifications below stay free to touch.
+            y = (screenH * 0.06f).toInt()
         }
         try {
             wm.addView(view, params)

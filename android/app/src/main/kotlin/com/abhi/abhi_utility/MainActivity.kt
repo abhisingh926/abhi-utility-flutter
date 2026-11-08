@@ -347,6 +347,10 @@ class MainActivity : FlutterFragmentActivity() {
                 "info" -> result.success(
                     mapOf("version" to AppShare.versionName(this), "apkSize" to AppShare.apkSize(this))
                 )
+                // Survives "Clear data" (only a reinstall resets it): limits offline use.
+                "firstInstallTime" -> result.success(
+                    packageManager.getPackageInfo(packageName, 0).firstInstallTime
+                )
                 "shareApk" -> Thread {
                     try {
                         val uri = AppShare.exportApk(this)

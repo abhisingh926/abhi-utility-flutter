@@ -163,7 +163,7 @@ class SosPageState extends State<SosPage> {
                 SizedBox(width: 14),
                 Expanded(
                   child: Text(
-                    'Draw a big "S" in the middle of the lock screen. The phone vibrates and calls '
+                    'Draw a big "S" at the top of the lock screen, over the clock. The phone vibrates and calls '
                     'your SOS contacts one by one until someone answers.',
                     style: TextStyle(color: Colors.white, fontSize: 15),
                   ),

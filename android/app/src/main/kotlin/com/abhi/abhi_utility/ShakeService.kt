@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -97,20 +99,30 @@ class ShakeService : Service(), SensorEventListener {
 
         if (!isRunning) {
             // Prefer linear acceleration (gravity already removed); otherwise filter it ourselves.
-            val linear = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-            linearSensor = linear != null
-            (linear ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER))?.let {
-                sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-            }
+            // Prefer the "wake-up" variant: it wakes the CPU itself when it has data,
+            // so no wake lock is needed while the screen is off.
+            val motion = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION, true)
+                ?.also { linearSensor = true }
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true)
+                    ?.also { linearSensor = false }
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+                    ?.also { linearSensor = true }
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+                    ?.also { linearSensor = false }
+            motion?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
             sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)?.let {
                 proximityMax = it.maximumRange
                 sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
             }
-            // Keep the CPU awake so the sensor keeps delivering events with the screen off.
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AbhiUtility:shake").apply {
-                setReferenceCounted(false)
-                acquire()
+            // Only phones without a wake-up motion sensor need a wake lock, and only
+            // while the screen is off (with the screen on the CPU is awake anyway).
+            if (motion != null && !motion.isWakeUpSensor) {
+                registerReceiver(screenReceiver, IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                    addAction(Intent.ACTION_SCREEN_ON)
+                })
+                screenReceiverOn = true
+                if (!(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive) holdWakeLock(true)
             }
             isRunning = true
         }
@@ -225,10 +237,32 @@ class ShakeService : Service(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+    /** Screen off -> keep the CPU awake for the sensor; screen on -> let go. */
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            holdWakeLock(intent.action == Intent.ACTION_SCREEN_OFF)
+        }
+    }
+    private var screenReceiverOn = false
+
+    private fun holdWakeLock(hold: Boolean) {
+        if (hold) {
+            if (wakeLock?.isHeld == true) return
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AbhiUtility:shake").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } else {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        }
+    }
+
     override fun onDestroy() {
         sensorManager.unregisterListener(this)
         cameraManager.unregisterTorchCallback(torchCallback)
-        wakeLock?.let { if (it.isHeld) it.release() }
+        if (screenReceiverOn) unregisterReceiver(screenReceiver)
+        holdWakeLock(false)
         isRunning = false
         super.onDestroy()
     }

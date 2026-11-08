@@ -1,5 +1,10 @@
 ﻿<manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+    <!-- Only Abhi Utility (same signing key) may stop an SOS in progress (Sos.STOP_PERMISSION). -->
+    <permission
+        android:name="com.abhi.abhi_utility.permission.SOS_CONTROL"
+        android:protectionLevel="signature"/>
+    <uses-permission android:name="com.abhi.abhi_utility.permission.SOS_CONTROL"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Excel viewer: list every spreadsheet on the phone (asked only when the user taps
          "Allow" in the Excel viewer; picking a file or "Open with" works without it). -->

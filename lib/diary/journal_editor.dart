@@ -29,8 +29,25 @@ class _JournalEditorState extends State<JournalEditor> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused && !DiaryLock.pickingPhoto) _closeIfLocked();
+    if (state != AppLifecycleState.paused) return;
+    // Android may kill the app while it is in the background (often while the
+    // camera is open): keep what was written so far.
+    _saveDraft();
+    if (!DiaryLock.pickingPhoto) _closeIfLocked();
   }
+
+  /// Saves the entry without leaving it. Never deletes anything: an empty
+  /// entry is simply not saved (yet).
+  Future<void> _saveDraft() async {
+    if (_closing) return;
+    _e.text = _text.text;
+    if (_e.isEmpty) return;
+    _draftSaved = true;
+    await JournalStore.save(_e);
+  }
+
+  /// A new entry was already saved as a draft (so emptying it must delete it).
+  bool _draftSaved = false;
 
   /// When the diary locks (app left, tab switched), save and close this entry so
   /// it isn't left open on screen.
@@ -142,7 +159,7 @@ class _JournalEditorState extends State<JournalEditor> with WidgetsBindingObserv
   Future<void> _save() async {
     _e.text = _text.text;
     if (_e.isEmpty) {
-      if (widget.entry != null) await JournalStore.delete(_e);
+      if (widget.entry != null || _draftSaved) await JournalStore.delete(_e);
       for (final img in _added) {
         await JournalStore.deleteImage(img);
       }
