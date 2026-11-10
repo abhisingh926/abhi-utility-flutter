@@ -16,6 +16,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.View
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
@@ -32,11 +35,13 @@ import java.io.File
 import java.util.Locale
 
 /**
- * SOS, after no contact answered. An invisible screen over the lock screen: nothing is
- * shown (no preview, no text), so whoever holds the phone doesn't see that it records.
- * It still counts as an app on screen, which Android requires for using the camera,
- * microphone and location (a background service may not). Android's own camera / mic
- * privacy dot still appears in the corner; apps can't hide that.
+ * SOS, after no contact answered. Shown over the lock screen but looks like the screen
+ * is off: all black, lowest brightness, no status bar, touches and Back ignored. So
+ * whoever holds the phone doesn't see that it records. It still counts as an app on
+ * screen, which Android requires for using the camera, microphone and location (a
+ * background service may not). Android's own camera / mic privacy dot can still show
+ * in the corner; apps can't hide that. Pressing the power button ends it early (what
+ * was recorded so far is kept and sent).
  *
  *  1. Finds the current location and texts it to every SOS contact.
  *  2. Records [Sos.RECORD_SECONDS] of video with sound.
@@ -97,14 +102,24 @@ class SosRecordActivity : ComponentActivity() {
         if (savedInstanceState == null) begin()
     }
 
-    // ---- UI: none -------------------------------------------------------------------------
+    // ---- UI: a "switched off" screen -----------------------------------------------------
 
     private fun buildUi() {
-        // Fully transparent, and touches go through to the lock screen below.
-        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
-        window.setDimAmount(0f)
-        setContentView(View(this))
+        window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+        window.attributes = window.attributes.apply { screenBrightness = 0f } // dimmest
+        setContentView(View(this).apply { setBackgroundColor(Color.BLACK) })
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    // Touches land on this black screen and do nothing; Back does nothing while it records.
+    @Deprecated("Back is ignored on purpose")
+    @Suppress("DEPRECATION", "MissingSuperCall")
+    override fun onBackPressed() {
+        if (handedOver) super.onBackPressed()
     }
 
     /** Progress goes to the log only: nothing on screen. */

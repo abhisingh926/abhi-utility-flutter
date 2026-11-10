@@ -331,9 +331,6 @@ class SosController(private val service: AccessibilityService) {
     fun refresh() {
         val onLockScreen = power.isInteractive && keyguard.isKeyguardLocked &&
             (windowPkg == null || windowPkg == SYSTEM_UI)
-        Log.d(TAG, "DBG refresh interactive=${power.isInteractive} locked=${keyguard.isKeyguardLocked} " +
-            "pkg=$windowPkg active=$isActive inCall=${inCall()} ready=${Sos.ready(service)} " +
-            "from=${Throwable().stackTrace.getOrNull(1)?.methodName}")
         if (onLockScreen && !isActive && !inCall() && Sos.ready(service)) showStrip() else hideStrip()
     }
 

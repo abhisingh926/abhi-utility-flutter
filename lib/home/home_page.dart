@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 
 import '../account/api_client.dart';
 import '../app_theme.dart';
-import '../account/backup_button.dart';
 import '../account/profile_page.dart';
 import '../account/subscription_page.dart';
 import '../diary/diary_store.dart';
@@ -198,8 +197,7 @@ class HomePageState extends State<HomePage> {
           const SizedBox(height: 16),
 
           // ---- Account ----
-          const SubscriptionBanner(), // free trial / subscribe
-          const BackupCard(),
+          const SubscriptionBanner(), // free trial / subscribe (Cloud backup is in My Profile)
 
           // ---- Tools ----
           Padding(

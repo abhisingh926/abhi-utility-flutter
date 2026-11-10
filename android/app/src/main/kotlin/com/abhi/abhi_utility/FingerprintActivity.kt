@@ -27,7 +27,7 @@ class FingerprintActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.setBackgroundColor(Color.rgb(12, 14, 40))
+        window.decorView.background = LockUi(this).background()
         pkg = intent.getStringExtra(EXTRA_PKG) ?: ""
         val name = intent.getStringExtra(EXTRA_APP_NAME) ?: "this app"
 
