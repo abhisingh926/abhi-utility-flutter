@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../app_theme.dart';
 import '../diary/diary_lock.dart';
+import '../store_build.dart';
 import 'pin_pad.dart';
 import 'accessibility_disclosure.dart';
 import '../widgets/section_card.dart';
@@ -379,6 +380,8 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
             },
           ),
         ),
+        // Not in the Play build: Play only allows blocking uninstalls in parental-control apps.
+        if (!kPlayStore) ...[
         const Divider(height: 1, indent: 72),
         SettingRow(
           icon: on ? Icons.shield : Icons.shield_outlined,
@@ -396,6 +399,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
             text: 'Settings are not protected. Turn on "Abhi Utility reel counter" in Accessibility.',
             onTap: () => openAccessibilityWithConsent(context),
           ),
+        ],
       ],
     );
   }

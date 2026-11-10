@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'account_page.dart';
 import 'api_client.dart';
+import 'legal_links.dart';
 import 'subscription_page.dart';
 import 'user_avatar.dart';
 
@@ -666,6 +667,8 @@ class _ProfilePageState extends State<ProfilePage> {
           title: Text('Delete account', style: TextStyle(color: Theme.of(context).colorScheme.error)),
           onTap: _deleteAccount,
         ),
+        const Divider(),
+        ...LegalLinks.tiles(context),
       ]);
 }
 

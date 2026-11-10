@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Google Play build (flavor "play"): merged over src/main/AndroidManifest.xml.
+     Removes what Play policy does not allow for this app:
+     - READ_CALL_LOG: only for default phone/SMS apps. SOS tells answered calls by call length instead.
+     - MANAGE_EXTERNAL_STORAGE: not core to the app. Files are picked (SAF) instead.
+     - WRITE_SECURE_SETTINGS: adb-only; switching the accessibility service on/off by itself
+       counts as changing settings without permission.
+     - PACKAGE_USAGE_STATS: only used together with WRITE_SECURE_SETTINGS (banking pause).
+     - Device admin (uninstall protection): Accessibility/device admin may not block uninstalling
+       outside parental-control or enterprise apps.
+     - VPN (openvpn_flutter): VpnService is only for apps whose core purpose is VPN. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.READ_CALL_LOG" tools:node="remove"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove"/>
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:node="remove"/>
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:node="remove"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" tools:node="remove"/>
+
+    <application>
+        <receiver android:name=".UninstallProtectionAdmin" tools:node="remove"/>
+        <service android:name=".BankingPauseService" tools:node="remove"/>
+        <service android:name="de.blinkt.openvpn.core.OpenVPNService" tools:node="remove"/>
+        <activity android:name="de.blinkt.openvpn.LaunchVPN" tools:node="remove"/>
+        <activity android:name="de.blinkt.openvpn.DisconnectVPNActivity" tools:node="remove"/>
+    </application>
+</manifest>

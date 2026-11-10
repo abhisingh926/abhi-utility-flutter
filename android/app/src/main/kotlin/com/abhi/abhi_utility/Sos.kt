@@ -58,8 +58,15 @@ object Sos {
     /** Signature permission (AndroidManifest.xml) guarding [ACTION_STOP] before Android 13. */
     const val STOP_PERMISSION = "com.abhi.abhi_utility.permission.SOS_CONTROL"
 
-    /** Call, see when a call ends, and read the call log to know if it was answered. */
-    val PERMISSIONS = arrayOf(
+    /**
+     * Call, see when a call ends, and read the call log to know if it was answered.
+     * The Play build may not read the call log (Play SMS/Call Log policy): it judges a
+     * call by its length instead (see SosCaller.onCallState).
+     */
+    val PERMISSIONS = if (BuildConfig.PLAY_STORE) arrayOf(
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.READ_PHONE_STATE,
+    ) else arrayOf(
         Manifest.permission.CALL_PHONE,
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.READ_CALL_LOG,
@@ -265,6 +272,10 @@ class SosController(private val service: AccessibilityService) {
 
         /** Wait after a call ends for the call log to be written. */
         private const val CALL_LOG_DELAY_MS = 2500L
+        /** Play build (no call log): a call this long was answered (ringing out ends sooner). */
+        private const val ANSWERED_CALL_MS = 60_000L
+        /** Play build: time to tap "Stop SOS" after a short call before the next contact is called. */
+        private const val NEXT_CALL_DELAY_MS = 8_000L
 
         private const val SYSTEM_UI = "com.android.systemui"
     }
@@ -287,6 +298,7 @@ class SosController(private val service: AccessibilityService) {
     private var callStartedAt = 0L
     private var waitingForCall = false
     private var sawOffhook = false
+    private var offhookAt = 0L
     private var callListener: Any? = null
 
     val isActive get() = queue.isNotEmpty()
@@ -515,17 +527,30 @@ class SosController(private val service: AccessibilityService) {
         when (state) {
             TelephonyManager.CALL_STATE_OFFHOOK -> {
                 sawOffhook = true
+                offhookAt = System.currentTimeMillis()
                 handler.removeCallbacks(noCallTimeout)
             }
             TelephonyManager.CALL_STATE_IDLE -> if (sawOffhook) {
                 waitingForCall = false
-                handler.postDelayed(checkAnswered, CALL_LOG_DELAY_MS)
+                if (!BuildConfig.PLAY_STORE) {
+                    handler.postDelayed(checkAnswered, CALL_LOG_DELAY_MS)
+                } else if (System.currentTimeMillis() - offhookAt >= ANSWERED_CALL_MS) {
+                    notify("SOS: ${current?.label ?: "a contact"} answered", "SOS calls stopped.", ongoing = false)
+                    finish()
+                } else {
+                    notify(
+                        "SOS: calling the next contact",
+                        "In ${NEXT_CALL_DELAY_MS / 1000} seconds. If ${current?.label ?: "someone"} answered, tap Stop.",
+                        ongoing = true
+                    )
+                    handler.postDelayed(checkAnswered, NEXT_CALL_DELAY_MS)
+                }
             }
         }
     }
 
     /** The call log has the talk time: more than 0 seconds means someone picked up. */
-    private fun lastCallAnswered(): Boolean = try {
+    private fun lastCallAnswered(): Boolean = if (BuildConfig.PLAY_STORE) false else try {
         service.contentResolver.query(
             CallLog.Calls.CONTENT_URI,
             arrayOf(CallLog.Calls.DURATION),

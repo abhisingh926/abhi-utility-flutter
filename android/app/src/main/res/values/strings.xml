@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="reel_counter_label">Abhi Utility reel counter</string>
-    <string name="reel_counter_description">Parental control and wellbeing. App Lock: sees which app is opened, to ask for the password or enforce time limits. Uninstall protection: reads Android Settings and the uninstall screen only, to cover screens that could remove Abhi Utility. Reel counter: counts reels, shorts and time spent in Instagram, YouTube, Facebook, Snapchat and similar apps. Download button: reads the browser address bar only when you tap it. SOS: notices the lock screen to allow emergency calls. Other apps are only seen by name. Nothing is uploaded or shared.</string>
+    <string name="reel_counter_description">Parental control and wellbeing. App Lock: sees which app is opened, to ask for the password or enforce time limits. Uninstall protection: reads Android Settings and the uninstall screen only, to cover screens that could remove Abhi Utility. Reel counter: counts reels, shorts and time spent in Instagram, YouTube, Facebook, Snapchat and similar apps. Download button: reads the browser address bar only when you tap it. SOS: notices the lock screen to allow emergency calls. Other apps are only seen by name. Screen content is never uploaded; if you sign in, your daily reel counts are synced to your account.</string>
     <string name="uninstall_protection_label">Abhi Utility uninstall protection</string>
     <string name="uninstall_protection_description">Stops children from uninstalling Abhi Utility. Parents turn it off in Abhi Utility → App Lock with the App Lock password.</string>
 </resources>

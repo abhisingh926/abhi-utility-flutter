@@ -31,8 +31,12 @@ object UninstallProtection {
 
     fun isAdminActive(context: Context): Boolean = dpm(context).isAdminActive(admin(context))
 
-    /** Switched on by the parent (the guard runs even if the admin was removed somehow). */
-    fun isOn(context: Context): Boolean =
+    /**
+     * Switched on by the parent (the guard runs even if the admin was removed somehow).
+     * Never on in the Play build: Play doesn't allow blocking uninstalls outside
+     * parental-control apps (its manifest also drops the device admin receiver).
+     */
+    fun isOn(context: Context): Boolean = !BuildConfig.PLAY_STORE &&
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ON, false)
 
     fun setOn(context: Context, on: Boolean) {

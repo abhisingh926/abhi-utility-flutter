@@ -31,6 +31,7 @@ import 'reels/reels_page.dart';
 import 'sos/sos_page.dart';
 import 'vpn/vpn_page.dart';
 import 'zip/zip_page.dart';
+import 'store_build.dart';
 
 /// Entry point of the quick download panel (QuickDownloadActivity): a small
 /// panel over the current app instead of the full Abhi Utility.
@@ -67,6 +68,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   static const _homeTab = 0;
+  static const _vpnTab = 2;
   static const _reelsTab = 3;
   static const _lockTab = 4;
   static const _scannerTab = 5;
@@ -81,11 +83,14 @@ class _HomeShellState extends State<HomeShell> {
   static const _docsTab = 14;
 
   /// Every feature: drives both the Home page cards and the bottom bar.
-  static const _features = [
+  /// The Play build has no VPN (Play's VpnService policy: VPN apps only).
+  static final _features = [for (final f in _allFeatures) if (!kPlayStore || f.tab != _vpnTab) f];
+
+  static const _allFeatures = [
     HomeFeature(tab: 1, icon: Icons.flashlight_on_outlined, title: 'Flashlight',
         subtitle: 'Shake to turn the torch on/off', color: Colors.amber,
         category: FeatureCategory.device),
-    HomeFeature(tab: 2, icon: Icons.vpn_key_outlined, title: 'VPN',
+    HomeFeature(tab: _vpnTab, icon: Icons.vpn_key_outlined, title: 'VPN',
         subtitle: 'Free servers in many countries', color: Colors.teal,
         category: FeatureCategory.security),
     HomeFeature(tab: _reelsTab, icon: Icons.slow_motion_video, title: 'Reels',
@@ -377,7 +382,7 @@ class _HomeShellState extends State<HomeShell> {
                   onPinnedChanged: _setPinned,
                 ),
                 const FlashlightPage(),
-                const VpnPage(),
+                kPlayStore ? const SizedBox.shrink() : const VpnPage(),
                 ReelsPage(key: _reelsKey),
                 // active: on screen and not behind the subscription paywall.
                 AppLockPage(key: _lockKey, active: _tab == _lockTab && ApiClient.instance.hasAccess),

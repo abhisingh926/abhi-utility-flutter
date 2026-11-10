@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../store_build.dart';
+
 import '../docs/doc_viewer.dart';
 import '../docs/doc_writer.dart';
 import 'sheet_store.dart';
@@ -243,6 +245,9 @@ class FileTabPageState extends State<FileTabPage> with WidgetsBindingObserver {
               ),
           ],
 
+          // Play build: no "All files access" (Play's All files access policy); files are
+          // picked or opened with "Open with" instead.
+          if (!kPlayStore) ...[
           _heading(context, 'All ${_k.typeName} files on this phone${all == null ? '' : ' (${all.length})'}',
               trailing: _access
                   ? IconButton(
@@ -291,6 +296,7 @@ class FileTabPageState extends State<FileTabPage> with WidgetsBindingObserver {
             )
           else
             for (final f in all) _FileTile(file: f, badge: _k.badge(f.extension), onTap: () => _open(f)),
+          ],
         ],
       ),
     );

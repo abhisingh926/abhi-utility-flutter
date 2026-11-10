@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.os.Build
@@ -178,7 +179,9 @@ class MainActivity : FlutterFragmentActivity() {
                 // ---- Uninstall protection ----
                 "protectionStatus" -> result.success(protectionStatus())
                 "enableProtection" -> {
-                    if (!UninstallProtection.hasAnyPassword(this)) {
+                    if (BuildConfig.PLAY_STORE) {
+                        result.error("UNAVAILABLE", "Uninstall protection isn't in the Play Store version", null)
+                    } else if (!UninstallProtection.hasAnyPassword(this)) {
                         result.error("NO_PIN", "Set the App Lock password first", null)
                     } else if (UninstallProtection.isAdminActive(this)) {
                         UninstallProtection.setOn(this, true)
@@ -387,6 +390,13 @@ class MainActivity : FlutterFragmentActivity() {
 
         MethodChannel(messenger, "abhi_utility/app").setMethodCallHandler { call, result ->
             when (call.method) {
+                // Privacy policy / terms in the browser.
+                "openUrl" -> try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(call.argument<String>("url"))))
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.success(false)
+                }
                 "shareText" -> {
                     val send = Intent(Intent.ACTION_SEND)
                         .setType("text/plain")

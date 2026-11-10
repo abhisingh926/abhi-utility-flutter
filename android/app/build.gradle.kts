@@ -46,6 +46,26 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
+    buildFeatures { buildConfig = true }
+
+    // Two builds of the same app:
+    //   full: every feature, for sideloading (flutter build apk --flavor full)
+    //   play: Google Play policy-compliant (flutter build appbundle --flavor play).
+    //         src/play/AndroidManifest.xml removes the restricted permissions and
+    //         components; BuildConfig.PLAY_STORE (Kotlin) and kPlayStore (Dart,
+    //         lib/store_build.dart) hide the features that need them.
+    flavorDimensions += "store"
+    productFlavors {
+        create("full") {
+            dimension = "store"
+            buildConfigField("boolean", "PLAY_STORE", "false")
+        }
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "PLAY_STORE", "true")
+        }
+    }
+
     // Required by openvpn_flutter: the OpenVPN engine runs from a native
     // library that must be extracted on install.
     packaging {

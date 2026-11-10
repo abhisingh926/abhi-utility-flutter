@@ -4,11 +4,14 @@ import 'dart:convert';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 
+import '../store_build.dart';
+
 /// Finds downloadable videos, images and audio behind a link.
 ///
 /// Works with direct media links and ordinary web pages (Open Graph / Twitter
 /// tags, <video>/<source> tags, JSON-LD, links and video URLs in scripts).
-/// YouTube is refused (YouTube's terms and Google Play policy).
+/// YouTube is refused (YouTube's terms and Google Play policy); the Play build also
+/// refuses the social / streaming sites in [_socialHosts].
 
 enum MediaKind { video, audio, image }
 
@@ -60,16 +63,29 @@ class FinderException implements Exception {
 const browserUserAgent =
     'Mozilla/5.0 (Linux; Android 15; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
 
-const _blockedHosts = ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'youtubekids.com', 'googlevideo.com'];
+const _youtubeHosts = ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'youtubekids.com', 'googlevideo.com'];
+
+/// Play build only: social sites whose terms forbid downloading their videos. Play removes
+/// downloaders for them on IP complaints (Intellectual Property policy).
+const _socialHosts = [
+  'instagram.com', 'cdninstagram.com', 'facebook.com', 'fb.watch', 'fb.com', 'fbcdn.net',
+  'tiktok.com', 'tiktokcdn.com', 'tiktokv.com', 'x.com', 'twitter.com', 'twimg.com', 't.co',
+  'snapchat.com', 'sc-cdn.net', 'threads.net', 'threads.com', 'pinterest.com', 'pinimg.com',
+  'vimeo.com', 'vimeocdn.com', 'dailymotion.com', 'netflix.com', 'primevideo.com',
+  'hotstar.com', 'jiocinema.com', 'sonyliv.com', 'zee5.com', 'spotify.com', 'jiosaavn.com',
+];
+
+const _blockedHosts = [..._youtubeHosts, if (kPlayStore) ..._socialHosts];
 
 bool isBlockedHost(Uri u) {
   final h = u.host.toLowerCase();
   return _blockedHosts.any((b) => h == b || h.endsWith('.$b'));
 }
 
-const blockedMessage =
-    "YouTube videos can't be downloaded here — YouTube's terms and Google Play's rules don't allow it. "
-    'Use YouTube Premium for offline viewing.';
+const blockedMessage = kPlayStore
+    ? "Videos from this site can't be downloaded here — its terms and Google Play's rules don't allow it."
+    : "YouTube videos can't be downloaded here — YouTube's terms and Google Play's rules don't allow it. "
+        'Use YouTube Premium for offline viewing.';
 
 /// First http(s) link in shared text like "Look at this! https://…".
 Uri? extractUrl(String text) {

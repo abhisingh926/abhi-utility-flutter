@@ -3,6 +3,7 @@ import 'package:in_app_purchase/in_app_purchase.dart';
 
 import 'account_page.dart';
 import 'api_client.dart';
+import 'legal_links.dart';
 import 'subscription_service.dart';
 import 'verify_email_page.dart';
 
@@ -274,6 +275,17 @@ class _PaywallViewState extends State<PaywallView> {
         const _Perks(),
         const SizedBox(height: 16),
         ..._plans(context),
+        const SizedBox(height: 8),
+        // Google Play subscriptions policy: renewal and cancellation terms before buying.
+        Text(
+          'Payment is charged to your Google Play account. The subscription renews automatically at the '
+          'same price each period unless you cancel at least 24 hours before it renews. Cancel any time in '
+          'the Play Store → Payments & subscriptions → Subscriptions; you keep Pro until the period ends.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 6),
+        LegalLinks.agreement(context, action: 'subscribing'),
         const SizedBox(height: 4),
         TextButton(
           onPressed: _subs.busy.value ? null : _subs.restore,

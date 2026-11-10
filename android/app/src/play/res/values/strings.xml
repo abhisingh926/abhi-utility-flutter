@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Play build: overrides src/main/res/values/strings.xml (no uninstall protection).
+     Keep in line with lib/applock/accessibility_disclosure.dart and the Play Console
+     accessibility declaration. -->
+<resources>
+    <string name="reel_counter_description">Digital wellbeing and safety. App Lock: sees which app is opened, to ask for your password or enforce the time limits you set. Reel counter: counts reels, shorts and time spent in Instagram, YouTube, Facebook, Snapchat and similar apps. Download button: reads the browser address bar only when you tap it. SOS: shows the SOS gesture strip on the lock screen for emergency calls. Other apps are only seen by name; it never reads messages, passwords or what you type. Screen content is never uploaded; if you sign in, your daily reel counts are synced to your account.</string>
+</resources>

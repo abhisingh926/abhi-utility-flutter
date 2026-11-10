@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../account/legal_links.dart';
 import '../account/api_client.dart';
 import '../app_theme.dart';
 import '../account/profile_page.dart';
@@ -259,6 +260,12 @@ class HomePageState extends State<HomePage> {
                     style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11, letterSpacing: 0.3)),
               ),
             ),
+          Center(
+            child: TextButton(
+              onPressed: () => LegalLinks.open(context, LegalLinks.privacyUrl),
+              child: const Text('Privacy policy', style: TextStyle(fontSize: 12)),
+            ),
+          ),
         ],
       ),
     );

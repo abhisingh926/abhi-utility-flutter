@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../store_build.dart';
 import 'browser_screen.dart';
 import 'link_history.dart';
 import 'media_finder.dart';
@@ -457,7 +458,7 @@ class DownloaderPageState extends State<DownloaderPage> with WidgetsBindingObser
           const SizedBox(height: 16),
           Text(
             'Download only content you own or have permission to save. '
-            "YouTube isn't supported (YouTube's terms and Google Play's rules).",
+            '${kPlayStore ? "YouTube, Instagram, Facebook, TikTok, X and streaming sites aren't supported (their terms)." : "YouTube isn't supported (YouTube's terms and Google Play's rules)."}',
             textAlign: TextAlign.center,
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),

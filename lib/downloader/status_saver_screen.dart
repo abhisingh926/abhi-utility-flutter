@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../store_build.dart';
+
 /// WhatsApp Status Saver: shows the statuses you've viewed in WhatsApp and
 /// saves them to the Gallery. Native side: StatusSaver.kt.
 class StatusSaverScreen extends StatefulWidget {
@@ -204,18 +206,28 @@ class _StatusSaverScreenState extends State<StatusSaverScreen> with WidgetsBindi
             textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
         Text(
-          'WhatsApp keeps the statuses you view in a hidden folder. Android needs your OK once:\n\n'
-          '1. Tap "Allow access" — Android settings open.\n'
-          '2. Turn on "Allow access to manage all files" for Abhi Utility, then go back.',
+          kPlayStore
+              ? 'WhatsApp keeps the statuses you view in a hidden folder. Android needs your OK once:\n\n'
+                  '1. Tap "Allow access" — Android\'s folder picker opens on that folder.\n'
+                  '2. Tap "Use this folder", then "Allow".'
+              : 'WhatsApp keeps the statuses you view in a hidden folder. Android needs your OK once:\n\n'
+                  '1. Tap "Allow access" — Android settings open.\n'
+                  '2. Turn on "Allow access to manage all files" for Abhi Utility, then go back.',
           style: TextStyle(color: scheme.onSurfaceVariant),
         ),
         const SizedBox(height: 20),
-        FilledButton.icon(onPressed: _allowAllFiles, icon: const Icon(Icons.lock_open), label: const Text('Allow access')),
-        const SizedBox(height: 8),
-        TextButton(
-          onPressed: _allowAccess,
-          child: const Text('Or pick the ".Statuses" folder instead'),
-        ),
+        // Play build: folder picker only (no "All files access", Play's All files access policy).
+        FilledButton.icon(
+            onPressed: kPlayStore ? _allowAccess : _allowAllFiles,
+            icon: const Icon(Icons.lock_open),
+            label: const Text('Allow access')),
+        if (!kPlayStore) ...[
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: _allowAccess,
+            child: const Text('Or pick the ".Statuses" folder instead'),
+          ),
+        ],
         const SizedBox(height: 12),
         Text(
           'Tip: view the status in WhatsApp first, otherwise the folder may not exist yet.',

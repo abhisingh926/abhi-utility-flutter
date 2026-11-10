@@ -186,7 +186,8 @@ object BankingMode {
     fun resume(ctx: Context) {
         Log.d(TAG, "resume")
         if (canToggle(ctx)) setServiceEnabled(ctx, true)
-        ctx.stopService(Intent(ctx, BankingPauseService::class.java))
+        // Not declared in the Play build (src/play/AndroidManifest.xml), where it never runs.
+        if (!BuildConfig.PLAY_STORE) ctx.stopService(Intent(ctx, BankingPauseService::class.java))
     }
 
     /** Called when the service connects: the "turn back on" notification is no longer needed. */

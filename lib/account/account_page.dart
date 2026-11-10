@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'backup_service.dart';
+import 'legal_links.dart';
 import 'subscription_page.dart';
 import 'subscription_service.dart';
 import 'user_avatar.dart';
@@ -337,6 +338,8 @@ class _AuthFormState extends State<_AuthForm> {
                       ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
                       : Text(_register ? 'Create account' : 'Login'),
                 ),
+                const SizedBox(height: 10),
+                LegalLinks.agreement(context, action: _register ? 'creating an account' : 'logging in'),
                 if (!_register)
                   TextButton(
                     onPressed: _busy

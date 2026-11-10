@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../account/api_client.dart';
 import '../account/profile_page.dart';
 import '../applock/accessibility_disclosure.dart';
+import '../store_build.dart';
 
 const _sosChannel = MethodChannel('abhi_utility/sos');
 
@@ -154,7 +155,9 @@ class SosPageState extends State<SosPage> {
   Future<void> _askPermissions() async {
     _apply(await _channel.invokeMapMethod<String, dynamic>('requestPermissions'));
     if (!_permissions && mounted) {
-      _snack('SOS needs Phone and Call log permissions. Allow them in App settings.', action: SnackBarAction(
+      _snack(kPlayStore
+          ? 'SOS needs the Phone permission. Allow it in App settings.'
+          : 'SOS needs Phone and Call log permissions. Allow them in App settings.', action: SnackBarAction(
         label: 'Settings',
         onPressed: () => _channel.invokeMethod('openAppSettings'),
       ));
@@ -283,7 +286,9 @@ class SosPageState extends State<SosPage> {
             ),
           if (!_permissions)
             _Warning(
-              text: 'Allow Phone and Call log, so SOS can call and know when a contact answers.',
+              text: kPlayStore
+                  ? 'Allow Phone, so SOS can call your contacts and see when a call ends.'
+                  : 'Allow Phone and Call log, so SOS can call and know when a contact answers.',
               button: 'Allow',
               onPressed: _askPermissions,
             ),
