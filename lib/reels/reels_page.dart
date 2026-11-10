@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../applock/app_lock_page.dart' show AppPicker, InstalledApp, InstalledApps;
+import '../app_theme.dart';
 import '../applock/accessibility_disclosure.dart';
+import '../widgets/section_card.dart';
 
 /// Daily reel report. Counting happens natively in ReelCounterService.kt
 /// (an Accessibility Service); this page reads the stored counts.
@@ -170,107 +172,112 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     await refresh();
   }
 
-  Widget _appsCard(BuildContext context) {
+  String _short(List<String> names) =>
+      names.length <= 4 ? names.join(', ') : '${names.take(4).join(', ')} +${names.length - 4} more';
+
+  /// One card with every setting: overlay, apps counted, banking pause.
+  Widget _settingsCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final installed = _installed?.map((a) => a.pkg).toSet();
     // Before the installed list is loaded, show every chosen app.
     final shown = [for (final p in _counted) if (installed == null || installed.contains(p)) _appName(p)];
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.checklist),
-        title: const Text('Apps counted'),
-        subtitle: Text(
-          shown.isEmpty
-              ? 'No apps chosen: reels are not counted'
-              : shown.length <= 4
-                  ? shown.join(', ')
-                  : '${shown.take(4).join(', ')} +${shown.length - 4} more',
-        ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: _chooseApps,
-      ),
-    );
-  }
-
-  Widget _overlayCard(BuildContext context) {
-    return Card(
-      child: SwitchListTile(
-        secondary: const Icon(Icons.picture_in_picture_alt_outlined),
-        title: const Text('Show counter on top of apps'),
-        subtitle: const Text('Reels and minutes today, shown while you use Instagram, YouTube, etc.'),
-        value: _overlayEnabled,
-        onChanged: (v) async {
-          await _channel.invokeMethod('setOverlayEnabled', {'enabled': v});
-          setState(() => _overlayEnabled = v);
-        },
-      ),
-    );
-  }
-
-  /// Banking apps refuse to work while the counter is on, so it pauses itself in them.
-  Widget _bankingCard(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final canToggle = _banking['canToggle'] == true;
     final usage = _banking['usageAccess'] == true;
     final paused = _banking['paused'] == true;
     final auto = _banking['auto'] != false;
-    return Card(
-      child: Column(
-        children: [
-          SwitchListTile(
-            secondary: const Icon(Icons.account_balance_outlined),
-            title: const Text('Pause in banking apps'),
-            subtitle: Text(canToggle
-                ? 'Banking and UPI apps block while the counter is on. It switches off while '
-                    'they are open and back on when you leave.'
-                : 'Banking and UPI apps block while the counter is on. It switches off when '
-                    'you open one; tap the notification afterwards to turn it back on.'),
-            value: auto,
-            onChanged: (v) async {
-              await _channel.invokeMethod('setBankingAuto', {'on': v});
-              refresh();
-            },
+    const divider = Divider(height: 1, indent: 72);
+    return SectionCard(
+      children: [
+        SettingRow(
+          icon: Icons.apps_rounded,
+          title: 'Apps counted',
+          subtitle: shown.isEmpty ? 'None chosen: reels are not counted' : _short(shown),
+          trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+          onTap: _chooseApps,
+        ),
+        if (_enabled) ...[
+          divider,
+          SettingRow(
+            icon: Icons.picture_in_picture_alt_rounded,
+            title: 'Counter on top of apps',
+            subtitle: 'Reels and minutes today, while you scroll',
+            trailing: Switch(
+              value: _overlayEnabled,
+              onChanged: (v) async {
+                await _channel.invokeMethod('setOverlayEnabled', {'enabled': v});
+                setState(() => _overlayEnabled = v);
+              },
+            ),
+          ),
+          divider,
+          // Banking apps refuse to work while the counter is on, so it pauses itself in them.
+          SettingRow(
+            icon: Icons.account_balance_rounded,
+            title: 'Pause in banking apps',
+            subtitle: canToggle
+                ? 'Switches off while a banking or UPI app is open'
+                : 'Switches off in banking apps; tap the notification to resume',
+            trailing: Switch(
+              value: auto,
+              onChanged: (v) async {
+                await _channel.invokeMethod('setBankingAuto', {'on': v});
+                refresh();
+              },
+            ),
           ),
           if (auto)
-            ListTile(
-              leading: const SizedBox(width: 24),
-              title: const Text('Banking apps'),
-              subtitle: Text(_bankApps == null
+            SettingRow(
+              icon: Icons.list_alt_rounded,
+              iconColor: scheme.onSurfaceVariant,
+              title: 'Banking apps',
+              subtitle: _bankApps == null
                   ? 'Finding them…'
                   : _bankApps!.isEmpty
                       ? 'None found. Tap to choose.'
-                      : _bankApps!.length <= 4
-                          ? _bankApps!.map(_appName).join(', ')
-                          : '${_bankApps!.take(4).map(_appName).join(', ')} +${_bankApps!.length - 4} more'),
-              trailing: const Icon(Icons.chevron_right),
+                      : _short(_bankApps!.map(_appName).toList()),
+              trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
               onTap: _chooseBankApps,
             ),
           if (canToggle && auto && !usage)
-            ListTile(
-              leading: Icon(Icons.info_outline, color: scheme.error),
-              title: const Text('Allow usage access'),
-              subtitle: const Text(
-                  'So the counter turns back on as soon as you leave the banking app '
-                  '(otherwise after 10 minutes).'),
-              trailing: const Icon(Icons.chevron_right),
+            WarningRow(
+              text: 'Allow usage access so the counter turns back on as soon as you leave '
+                  'the banking app (otherwise after 10 minutes).',
               onTap: () => _channel.invokeMethod('openUsageAccess'),
             ),
           if (paused)
-            ListTile(
-              leading: Icon(Icons.pause_circle_outline, color: scheme.primary),
-              title: const Text('Paused for banking'),
-              trailing: FilledButton.tonal(
-                onPressed: () async {
-                  await _channel.invokeMethod('resumeFromBanking');
-                  await Future.delayed(const Duration(milliseconds: 600));
-                  refresh();
-                },
-                child: const Text('Resume'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+                decoration: BoxDecoration(
+                  color: scheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.pause_circle_outline, color: scheme.onPrimaryContainer, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text('Paused for banking', style: TextStyle(color: scheme.onPrimaryContainer)),
+                    ),
+                    FilledButton.tonal(
+                      onPressed: () async {
+                        await _channel.invokeMethod('resumeFromBanking');
+                        await Future.delayed(const Duration(milliseconds: 600));
+                        refresh();
+                      },
+                      child: const Text('Resume'),
+                    ),
+                  ],
+                ),
               ),
             ),
         ],
-      ),
+      ],
     );
   }
+
+  Widget _card({required Widget child, Color? color}) => SectionCard(color: color, children: [child]);
 
   Future<void> _chooseBankApps() async {
     final picked = await showModalBottomSheet<List<InstalledApp>>(
@@ -307,22 +314,26 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     return RefreshIndicator(
       onRefresh: refresh,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
-          if (!_enabled) _enableCard(context),
-          if (_enabled) _overlayCard(context),
-          if (_enabled) _bankingCard(context),
-          _appsCard(context),
+          _hero(context),
+          if (!_enabled) ...[const SizedBox(height: 12), _enableCard(context)],
+          // Daily stats first; settings (changed rarely) at the bottom.
           if (_days.isNotEmpty) ...[
-            _todayCard(context),
-            const SizedBox(height: 12),
+            const SectionTitle('Today by app'),
+            _todayAppsCard(context),
+            const SectionTitle('Insights'),
             _timeCard(context),
             const SizedBox(height: 12),
             _weekCard(context),
-            const SizedBox(height: 12),
-            _historyCard(context),
+            if (_days.length > 1) ...[
+              const SizedBox(height: 12),
+              _historyCard(context),
+            ],
           ],
-          const SizedBox(height: 12),
+          const SectionTitle('Settings'),
+          _settingsCard(context),
+          const SizedBox(height: 16),
           Text(
             'Counts each swipe to a new full-screen video in the chosen apps. Data stays on this phone.',
             textAlign: TextAlign.center,
@@ -337,7 +348,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
 
   Widget _enableCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
+    return _card(
       color: scheme.errorContainer,
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -369,49 +380,119 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _todayCard(BuildContext context) {
-    final today = _days.first.value;
-    final todaySecs = _seconds[_days.first.key] ?? {};
+  /// Gradient header: reels and time today, compared with yesterday.
+  Widget _hero(BuildContext context) {
+    final hasDays = _days.isNotEmpty;
+    final total = hasDays ? _total(_days.first.value) : 0;
     final yesterday = _days.length > 1 ? _total(_days[1].value) : 0;
-    final total = _total(today);
-    // Apps with reels or time today, most reels first.
-    final pkgs = {...today.keys, ...todaySecs.keys}.toList()
-      ..sort((a, b) => (today[b] ?? 0).compareTo(today[a] ?? 0));
-    final diff = total - yesterday;
-    final totalSecs = _total(todaySecs);
+    final totalSecs = hasDays ? _total(_seconds[_days.first.key] ?? {}) : 0;
     final yesterdaySecs = _seconds.length > 1 ? _total(_seconds.values.elementAt(1)) : 0;
-    final timeDiff = totalSecs - yesterdaySecs;
+    final paused = _banking['paused'] == true;
+    final (statusText, statusColor) = !_enabled
+        ? ('Counter is off', const Color(0xFFFFB020))
+        : paused
+            ? ('Paused for banking', const Color(0xFFFFB020))
+            : ('Counting', const Color(0xFF4ADE80));
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Today', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: _bigStat(context, '$total', 'reels',
-                      yesterday > 0 || total > 0 ? _compare(diff, '$yesterday') : null, diff),
-                ),
-                Expanded(
-                  child: _bigStat(context, formatTime(totalSecs), 'time spent',
-                      yesterdaySecs > 0 || totalSecs > 0 ? _compare(timeDiff ~/ 60, formatTime(yesterdaySecs), unit: ' min') : null,
-                      timeDiff ~/ 60),
-                ),
+    Widget stat(String value, String label, String? note, int diff) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value,
+                    style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w700)),
+              ),
+              Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 13)),
+              if (note != null) ...[
+                const SizedBox(height: 6),
+                Text(note,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: diff > 0
+                          ? const Color(0xFFFCA5A5)
+                          : diff < 0
+                              ? const Color(0xFF86EFAC)
+                              : Colors.white.withValues(alpha: 0.7),
+                    )),
               ],
-            ),
-            const SizedBox(height: 16),
-            if (pkgs.isEmpty)
-              const Text('No reels or time in these apps yet today 🎉')
-            else
-              for (final p in pkgs)
-                _appRow(context, _appName(p), today[p] ?? 0, total, todaySecs[p] ?? 0),
-          ],
+            ],
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [BrandColors.indigo, BrandColors.navy],
         ),
+        boxShadow: [
+          BoxShadow(color: BrandColors.navy.withValues(alpha: 0.25), blurRadius: 18, offset: const Offset(0, 8)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.slow_motion_video_rounded, color: BrandColors.cyan, size: 24),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text('Today',
+                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: statusColor),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(statusText, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                ]),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              stat('$total', 'reels watched',
+                  yesterday > 0 || total > 0 ? _compare(total - yesterday, '$yesterday') : null, total - yesterday),
+              Container(
+                width: 1,
+                height: 56,
+                margin: const EdgeInsets.symmetric(horizontal: 16),
+                color: Colors.white.withValues(alpha: 0.15),
+              ),
+              stat(
+                  formatTime(totalSecs),
+                  'time spent',
+                  yesterdaySecs > 0 || totalSecs > 0
+                      ? _compare((totalSecs - yesterdaySecs) ~/ 60, formatTime(yesterdaySecs), unit: ' min')
+                      : null,
+                  (totalSecs - yesterdaySecs) ~/ 60),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -420,31 +501,33 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
       ? 'Same as yesterday'
       : '${diff.abs()}$unit ${diff > 0 ? 'more' : 'less'} than yesterday ($yesterday)';
 
-  Widget _bigStat(BuildContext context, String value, String label, String? note, int diff) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(value,
-            style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.bold)),
-        Text(label, style: TextStyle(color: scheme.onSurfaceVariant)),
-        if (note != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(note,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: diff > 0 ? Colors.red : diff < 0 ? Colors.green : scheme.onSurfaceVariant,
-                )),
-          ),
-      ],
+  /// Reels and time per app today, most reels first.
+  Widget _todayAppsCard(BuildContext context) {
+    final today = _days.first.value;
+    final todaySecs = _seconds[_days.first.key] ?? {};
+    final total = _total(today);
+    final pkgs = {...today.keys, ...todaySecs.keys}.toList()
+      ..sort((a, b) => (today[b] ?? 0).compareTo(today[a] ?? 0));
+    return _card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (pkgs.isEmpty)
+              const Text('No reels or time in these apps yet today 🎉')
+            else
+              for (final p in pkgs) _appRow(context, _appName(p), today[p] ?? 0, total, todaySecs[p] ?? 0),
+          ],
+        ),
+      ),
     );
   }
 
-  /// Total time in the counted apps: today, 7 and 30 days, and per app (7 days).
+  /// Time in the counted apps over longer periods (today is in the header): daily
+  /// average, 7 and 30 days, and per app over 7 days.
   Widget _timeCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final today = _total(_timeOver(1));
     final week = _timeOver(7);
     final weekTotal = _total(week);
     final month = _total(_timeOver(30));
@@ -462,23 +545,17 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
           ),
         );
 
-    return Card(
+    return _card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(child: Text('Time spent', style: Theme.of(context).textTheme.titleMedium)),
-                if (daysWithData > 0)
-                  Text('avg ${formatTime(weekTotal ~/ 7)} / day', style: TextStyle(color: scheme.onSurfaceVariant)),
-              ],
-            ),
+            Text('Time spent', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 16),
             Row(
               children: [
-                period('Today', today),
+                period('Avg per day', daysWithData > 0 ? weekTotal ~/ 7 : 0),
                 Container(width: 1, height: 36, color: scheme.outlineVariant),
                 period('Last 7 days', weekTotal),
                 Container(width: 1, height: 36, color: scheme.outlineVariant),
@@ -592,7 +669,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     const dayNames = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
     final scheme = Theme.of(context).colorScheme;
 
-    return Card(
+    return _card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -677,7 +754,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
 
   Widget _historyCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
+    return _card(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(
@@ -685,10 +762,11 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Text('Daily report', style: Theme.of(context).textTheme.titleMedium),
+              child: Text('Previous days', style: Theme.of(context).textTheme.titleMedium),
             ),
-            for (var i = 0; i < _days.length; i++)
-              if (i < 2 || _total(_days[i].value) > 0 || _total(_seconds[_days[i].key] ?? {}) > 0)
+            // Today is in the header; yesterday always, older days only if something was counted.
+            for (var i = 1; i < _days.length; i++)
+              if (i == 1 || _total(_days[i].value) > 0 || _total(_seconds[_days[i].key] ?? {}) > 0)
                 ListTile(
                   dense: true,
                   title: Text(_dayLabel(_days[i].key, i)),

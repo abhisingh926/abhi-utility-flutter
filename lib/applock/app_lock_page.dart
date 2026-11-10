@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app_theme.dart';
 import '../diary/diary_lock.dart';
 import 'pin_pad.dart';
 import 'accessibility_disclosure.dart';
+import '../widgets/section_card.dart';
 
 /// App Lock: pick apps and a rule (always locked / daily limit / hourly limit).
 /// Enforcement happens natively in ReelCounterService.kt (Accessibility Service).
@@ -356,38 +358,220 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     }
   }
 
-  Widget _protectionCard(ColorScheme scheme) {
+  /// "Security" card: fingerprint unlock + uninstall protection (and its warnings).
+  Widget _securityCard(ColorScheme scheme) {
     final on = _protection['on'] == true;
     final admin = _protection['admin'] == true;
     final guard = _protection['guard'] == true;
-    return Card(
-      child: Column(
-        children: [
-          SwitchListTile(
-            secondary: CircleAvatar(child: Icon(on ? Icons.shield : Icons.shield_outlined)),
-            title: const Text('Uninstall protection'),
-            subtitle: Text(on
-                ? "Children can't uninstall Abhi Utility. It needs the App Lock password or your fingerprint."
-                : 'Stop children from uninstalling Abhi Utility without the password'),
-            value: on,
-            onChanged: _setProtection,
+    return SectionCard(
+      children: [
+        SettingRow(
+          icon: Icons.fingerprint,
+          title: 'Fingerprint unlock',
+          subtitle: _bioAvailable
+              ? 'Instead of the password, here and for extra time'
+              : 'Set up a fingerprint in phone settings first',
+          trailing: Switch(
+            value: _fingerprint,
+            onChanged: (v) async {
+              setState(() => _fingerprint = v);
+              await _channel.invokeMethod('setFingerprintEnabled', {'on': v});
+            },
           ),
-          if (on && !admin)
-            ListTile(
-              leading: Icon(Icons.warning_amber, color: scheme.error),
-              title: const Text("Android's uninstall block is off"),
-              subtitle: const Text('Tap to activate it again'),
-              onTap: () => _setProtection(true),
-            ),
-          if (on && !guard)
-            ListTile(
-              leading: Icon(Icons.warning_amber, color: scheme.error),
-              title: const Text('Settings are not protected'),
-              subtitle: const Text('Turn on "Abhi Utility reel counter" in Accessibility settings'),
-              onTap: () => openAccessibilityWithConsent(context),
-            ),
+        ),
+        const Divider(height: 1, indent: 72),
+        SettingRow(
+          icon: on ? Icons.shield : Icons.shield_outlined,
+          title: 'Uninstall protection',
+          subtitle: on ? 'Uninstalling needs the App Lock password' : 'Anyone can uninstall Abhi Utility',
+          trailing: Switch(value: on, onChanged: _setProtection),
+        ),
+        if (on && !admin)
+          WarningRow(
+            text: "Android's uninstall block is off. Tap to activate it again.",
+            onTap: () => _setProtection(true),
+          ),
+        if (on && !guard)
+          WarningRow(
+            text: 'Settings are not protected. Turn on "Abhi Utility reel counter" in Accessibility.',
+            onTap: () => openAccessibilityWithConsent(context),
+          ),
+      ],
+    );
+  }
+
+  /// Gradient header: status, counts, password + lock buttons.
+  Widget _header(ColorScheme scheme) {
+    final lockedNow = _rules.where((r) => r.locked).length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [BrandColors.indigo, BrandColors.navy],
+        ),
+        boxShadow: [
+          BoxShadow(color: BrandColors.navy.withValues(alpha: 0.25), blurRadius: 18, offset: const Offset(0, 8)),
         ],
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.lock_person_rounded, color: BrandColors.cyan, size: 26),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('App Lock',
+                        style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Row(children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _serviceEnabled ? const Color(0xFF4ADE80) : const Color(0xFFFFB020),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(_serviceEnabled ? 'Protection active' : 'Service is off',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 13)),
+                      ),
+                    ]),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              _HeaderStat(value: '${_rules.length}', label: _rules.length == 1 ? 'app with a lock' : 'apps with a lock'),
+              Container(width: 1, height: 32, color: Colors.white.withValues(alpha: 0.15)),
+              _HeaderStat(value: '$lockedNow', label: 'locked right now'),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white.withValues(alpha: 0.14),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(44),
+                  ),
+                  onPressed: _changePassword,
+                  icon: const Icon(Icons.password_rounded, size: 18),
+                  label: const Text('Password'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: BrandColors.cyan,
+                    foregroundColor: BrandColors.navy,
+                    minimumSize: const Size.fromHeight(44),
+                  ),
+                  onPressed: relock,
+                  icon: const Icon(Icons.lock_rounded, size: 18),
+                  label: const Text('Lock now'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One locked app: icon, rule, usage bar, status pill.
+  Widget _ruleCard(LockRule r, ColorScheme scheme) {
+    final progress = r.limitSeconds > 0 ? (r.usedSeconds / r.limitSeconds).clamp(0.0, 1.0) : 1.0;
+    final barColor = r.locked
+        ? scheme.error
+        : progress > 0.8
+            ? const Color(0xFFF59E0B)
+            : scheme.primary;
+    return SectionCard(
+      onTap: () => _editRule(r.pkg, r.label, r.icon, r.mode, r.minutes, existing: true),
+      padding: const EdgeInsets.all(14),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: _icon(r.icon, size: 36),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(r.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                      ),
+                      _StatusPill(locked: r.locked),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(describe(r.mode, r.minutes),
+                      style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13)),
+                  if (r.mode != 'block') ...[
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: progress.toDouble(),
+                        minHeight: 6,
+                        color: barColor,
+                        backgroundColor: scheme.surfaceContainerHighest,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Text(_status(r),
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: r.locked ? scheme.error : scheme.onSurfaceVariant,
+                        fontWeight: r.locked ? FontWeight.w600 : null,
+                      )),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -462,124 +646,60 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
       body: RefreshIndicator(
         onRefresh: refresh,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
           children: [
-            Row(
-              children: [
-                Icon(Icons.lock_open, size: 18, color: scheme.primary),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text('Unlocked',
-                      style: TextStyle(color: scheme.onSurfaceVariant)),
-                ),
-                TextButton(onPressed: _changePassword, child: const Text('Change password')),
-                IconButton(
-                  tooltip: 'Lock',
-                  onPressed: relock,
-                  icon: const Icon(Icons.lock),
-                ),
-              ],
-            ),
-            if (!_serviceEnabled)
-              Card(
+            _header(scheme),
+            if (!_serviceEnabled) ...[
+              const SizedBox(height: 12),
+              SectionCard(
                 color: scheme.errorContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('App Lock needs the Abhi Utility service',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, color: scheme.onErrorContainer)),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Turn on "Abhi Utility reel counter" in Accessibility settings. '
-                        'It is what notices when a locked app opens.',
-                        style: TextStyle(color: scheme.onErrorContainer),
-                      ),
-                      const SizedBox(height: 12),
-                      FilledButton.icon(
-                        onPressed: () => openAccessibilityWithConsent(context),
-                        icon: const Icon(Icons.settings_accessibility),
-                        label: const Text('Open Accessibility settings'),
-                      ),
-                    ],
+                children: [
+                  SettingRow(
+                    icon: Icons.warning_amber_rounded,
+                    iconColor: scheme.error,
+                    title: 'App Lock is not running',
+                    subtitle: 'Turn on "Abhi Utility reel counter" in Accessibility. It notices when a locked app opens.',
+                    trailing: Icon(Icons.chevron_right, color: scheme.onErrorContainer),
+                    onTap: () => openAccessibilityWithConsent(context),
                   ),
-                ),
+                ],
               ),
-            Card(
-              child: ListTile(
-                leading: const CircleAvatar(child: Icon(Icons.groups)),
-                title: const Text('Lock all social media'),
-                subtitle: const Text('Instagram, Facebook, YouTube, Snapchat, WhatsApp… in one go'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => _addApps(filter: AppFilter.social, selectAll: true),
-              ),
-            ),
-            Card(
-              child: SwitchListTile(
-                secondary: const CircleAvatar(child: Icon(Icons.fingerprint)),
-                title: const Text('Fingerprint unlock'),
-                subtitle: const Text('Use your fingerprint instead of the password here and when a locked app asks for more time'),
-                value: _fingerprint,
-                onChanged: (on) async {
-                  setState(() => _fingerprint = on);
-                  await _channel.invokeMethod('setFingerprintEnabled', {'on': on});
-                },
-              ),
-            ),
-            _protectionCard(scheme),
+            ],
+            // Locked apps first; quick action and security settings (changed rarely) below.
+            SectionTitle(_rules.isEmpty ? 'Locked apps' : 'Locked apps · ${_rules.length}'),
             if (_rules.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 48),
-                child: Column(
-                  children: [
-                    Icon(Icons.lock_outline, size: 64, color: scheme.onSurfaceVariant),
-                    const SizedBox(height: 16),
-                    Text('No apps locked yet', style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Tap "Lock apps" to block apps completely,\n'
-                      'or limit it to a few minutes per day or per hour.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
+              SectionCard(
+                padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+                children: [
+                  Icon(Icons.lock_outline_rounded, size: 48, color: scheme.primary),
+                  const SizedBox(height: 12),
+                  Text('No apps locked yet',
+                      textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Tap "Lock apps" to block an app completely, or allow a few minutes per day or per hour.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                ],
               )
             else
               for (final r in _rules)
-                Card(
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    leading: _icon(r.icon),
-                    title: Text(r.label, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(describe(r.mode, r.minutes)),
-                        const SizedBox(height: 4),
-                        if (!r.locked && r.limitSeconds > 0)
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: (r.usedSeconds / r.limitSeconds).clamp(0, 1).toDouble(),
-                              minHeight: 5,
-                            ),
-                          ),
-                        const SizedBox(height: 4),
-                        Text(_status(r),
-                            style: TextStyle(
-                              color: r.locked ? scheme.error : scheme.onSurfaceVariant,
-                              fontWeight: r.locked ? FontWeight.w600 : null,
-                            )),
-                      ],
-                    ),
-                    trailing: Icon(r.locked ? Icons.lock : Icons.lock_clock,
-                        color: r.locked ? scheme.error : scheme.primary),
-                    onTap: () => _editRule(r.pkg, r.label, r.icon, r.mode, r.minutes, existing: true),
-                  ),
+                Padding(padding: const EdgeInsets.only(bottom: 10), child: _ruleCard(r, scheme)),
+            const SectionTitle('Quick action'),
+            SectionCard(
+              children: [
+                SettingRow(
+                  icon: Icons.groups_rounded,
+                  title: 'Lock all social media',
+                  subtitle: 'Instagram, YouTube, Snapchat, WhatsApp… in one go',
+                  trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                  onTap: () => _addApps(filter: AppFilter.social, selectAll: true),
                 ),
+              ],
+            ),
+            const SectionTitle('Security'),
+            _securityCard(scheme),
           ],
         ),
       ),
@@ -935,6 +1055,51 @@ class _ChangePasswordState extends State<_ChangePassword> {
         }
         return null;
       },
+    );
+  }
+}
+
+// ---- App Lock header pieces -------------------------------------------------------------
+
+
+
+
+
+class _HeaderStat extends StatelessWidget {
+  const _HeaderStat({required this.value, required this.label});
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: Column(
+          children: [
+            Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
+            Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12)),
+          ],
+        ),
+      );
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.locked});
+  final bool locked;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final c = locked ? scheme.error : const Color(0xFF16A34A);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(locked ? Icons.lock_rounded : Icons.lock_open_rounded, size: 13, color: c),
+          const SizedBox(width: 4),
+          Text(locked ? 'Locked' : 'Open', style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.w600)),
+        ],
+      ),
     );
   }
 }
