@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'account/data_sync.dart';
 import 'account/backup_service.dart';
 import 'account/account_page.dart';
 import 'account/api_client.dart';
@@ -164,6 +165,7 @@ class _HomeShellState extends State<HomeShell> {
     ApiClient.instance.load().then((_) async {
       await _refreshAccount();
       await syncSosUploadKey(); // SOS recording on: make sure uploads go to this account
+      DataSync.run(); // tasks, diary and reel stats -> the account on the server
     });
     SubscriptionService.instance.init(); // catches Play purchases that finish later
     // Leaving the app locks App Lock + Diary (not for the photo picker / our own system screens).
@@ -171,8 +173,12 @@ class _HomeShellState extends State<HomeShell> {
       onResume: () {
         DiaryLock.onAppResumed(); // locks if the user left from the photo picker / a system screen
         _refreshAccount();
+        DataSync.run();
       },
-      onPause: DiaryLock.onAppPaused,
+      onPause: () {
+        DiaryLock.onAppPaused();
+        DataSync.run(); // send what was just written before the app may be closed
+      },
     );
     AccountPage.restoredVersion.addListener(_onRestored);
     ApiClient.instance.user.addListener(_onUserChanged);
@@ -293,6 +299,7 @@ class _HomeShellState extends State<HomeShell> {
     _userId = id;
     _onRestored();
     syncSosUploadKey(); // SOS recordings upload to the account now logged in
+    if (id != null) DataSync.run(minGap: Duration.zero); // the new account's data
   }
 
   @override
