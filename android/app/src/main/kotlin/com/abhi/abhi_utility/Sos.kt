@@ -253,7 +253,7 @@ object Sos {
 }
 
 /**
- * Lock-screen part of SOS: an invisible strip at the top of the lock screen (clock area) where
+ * Lock-screen part of SOS: an invisible area on the lock screen (clock down to mid-screen) where
  * the "S" is drawn, and the calls (each contact in turn, [ROUNDS] times through the
  * list, until one answers).
  */
@@ -362,7 +362,9 @@ class SosController(private val service: AccessibilityService) {
         val view = DrawView()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            (screenH * 0.24f).toInt(),
+            // Clock area down to the middle of the screen (6%–62%): people draw the S where
+            // it feels natural, often mid-screen. A smaller strip (6%–30%) missed most strokes.
+            (screenH * 0.56f).toInt(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -370,8 +372,7 @@ class SosController(private val service: AccessibilityService) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP
-            // Upper part of the lock screen (around the clock): no buttons there. The
-            // PIN/pattern pad and the notifications below stay free to touch.
+            // The bottom 38% (unlock swipe, PIN/pattern pad, shortcuts) stays free to touch.
             y = (screenH * 0.06f).toInt()
         }
         try {
