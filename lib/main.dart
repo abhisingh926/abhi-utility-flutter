@@ -15,7 +15,6 @@ import 'flashlight_page.dart';
 import 'package:pdfrx/pdfrx.dart' show pdfrxFlutterInitialize;
 
 import 'diary/diary_lock.dart';
-import 'home/app_share.dart';
 import 'home/home_page.dart';
 import 'home/nav_prefs.dart';
 import 'diary/journal_page.dart';
@@ -137,6 +136,10 @@ class _HomeShellState extends State<HomeShell> {
   final _docsKey = GlobalKey<FileTabPageState>();
   final _sosKey = GlobalKey<SosPageState>();
   int _tab = _homeTab;
+
+  /// Tabs opened at least once. A tab is only built when first opened (each one loads
+  /// its data in initState, and some reload on every resume), then kept alive.
+  final Set<int> _visited = {_homeTab};
 
   /// Features shown in the bottom bar after Home (chosen on the Home page).
   List<int> _pinned = const [_reelsTab, _lockTab, _viewerTab, _diaryTab];
@@ -348,14 +351,9 @@ class _HomeShellState extends State<HomeShell> {
                 onPressed: _openAccount,
               ),
             ),
-            IconButton(
-              tooltip: 'Share this app',
-              icon: const Icon(Icons.share),
-              onPressed: () => AppShare.shareApk(context),
-            ),
           ],
         ),
-        // IndexedStack keeps all tabs alive, so the VPN state survives tab switches.
+        // IndexedStack keeps opened tabs alive, so the VPN state survives tab switches.
         // Without a free trial or subscription, every feature (not Home) is covered
         // by the paywall: register for the trial, or subscribe once it has ended.
         body: Stack(
@@ -363,7 +361,7 @@ class _HomeShellState extends State<HomeShell> {
           children: [
             IndexedStack(
               index: _tab,
-              children: [
+              children: <Widget>[
                 HomePage(
                   key: _homeKey,
                   features: _features,
@@ -388,7 +386,10 @@ class _HomeShellState extends State<HomeShell> {
                 FileTabPage(key: _excelKey, kind: excelKind),
                 SosPage(key: _sosKey),
                 FileTabPage(key: _docsKey, kind: docsKind),
-              ],
+              ]
+                  .indexed
+                  .map((e) => (_visited..add(_tab)).contains(e.$1) ? e.$2 : const SizedBox.shrink())
+                  .toList(),
             ),
             if (_tab != _homeTab)
               ListenableBuilder(

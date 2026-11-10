@@ -6,6 +6,12 @@
         android:protectionLevel="signature"/>
     <uses-permission android:name="com.abhi.abhi_utility.permission.SOS_CONTROL"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Granted only by adb, on the owner's own phone: lets the reel counter switch itself
+         off while a banking app is open and back on afterwards (BankingMode.kt). -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions"/>
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions"/>
     <!-- Excel viewer: list every spreadsheet on the phone (asked only when the user taps
          "Allow" in the Excel viewer; picking a file or "Open with" works without it). -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
@@ -143,6 +149,14 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Listens for shake gestures to toggle the flashlight while the app is closed" />
+        </service>
+        <service
+            android:name=".BankingPauseService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the reel counter paused while a banking app is open, then switches it back on" />
         </service>
         <service
             android:name=".ReelCounterService"

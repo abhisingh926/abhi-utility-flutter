@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../applock/app_lock_page.dart' show AppPicker, InstalledApp;
+import '../applock/app_lock_page.dart' show AppPicker, InstalledApp, InstalledApps;
 import '../applock/accessibility_disclosure.dart';
 
 /// Daily reel report. Counting happens natively in ReelCounterService.kt
@@ -15,10 +15,11 @@ class ReelsPage extends StatefulWidget {
 
 class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   static const _channel = MethodChannel('abhi_utility/reels');
-  static const _appsChannel = MethodChannel('abhi_utility/applock');
   static const _historyDays = 30;
 
   bool _enabled = false;
+  Map<String, dynamic> _banking = const {};
+  List<String>? _bankApps;
   bool _loading = true;
   Map<String, String> _names = {};
 
@@ -65,18 +66,24 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
             (v as Map).map((k, s) => MapEntry(k as String, s as int)),
           ));
       final overlay = await _channel.invokeMethod<bool>('isOverlayEnabled') ?? true;
+      final banking = await _channel.invokeMapMethod<String, dynamic>('bankingStatus') ?? {};
+      final bankApps = await _channel.invokeListMethod<String>('bankingApps') ?? [];
       final counted = await _channel.invokeListMethod<String>('countedApps') ?? [];
       // Names for every app in the history too (apps counted earlier, then removed).
       final names = await _channel.invokeMapMethod<String, String>('appNames', {
             'pkgs': {
               for (final d in days) ...d.value.keys,
               for (final d in seconds.values) ...d.keys,
+              ...bankApps,
             }.toList(),
           }) ??
           {};
       if (!mounted) return;
       setState(() {
-        _enabled = enabled;
+        _banking = banking;
+        _bankApps = bankApps;
+        // Paused for a banking app still counts as on.
+        _enabled = enabled || banking['paused'] == true;
         _names = names;
         _days = days;
         _seconds = seconds;
@@ -131,9 +138,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   bool _weekShowsTime = false;
 
   Future<List<InstalledApp>> _loadApps() async {
-    if (_installed != null) return _installed!;
-    final raw = await _appsChannel.invokeListMethod<Map>('apps') ?? [];
-    return _installed = raw.map(InstalledApp.fromMap).toList();
+    return _installed = await InstalledApps.load();
   }
 
   static Widget _pickerIcon(Uint8List? bytes, {double size = 40}) => bytes == null
@@ -201,6 +206,91 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     );
   }
 
+  /// Banking apps refuse to work while the counter is on, so it pauses itself in them.
+  Widget _bankingCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final canToggle = _banking['canToggle'] == true;
+    final usage = _banking['usageAccess'] == true;
+    final paused = _banking['paused'] == true;
+    final auto = _banking['auto'] != false;
+    return Card(
+      child: Column(
+        children: [
+          SwitchListTile(
+            secondary: const Icon(Icons.account_balance_outlined),
+            title: const Text('Pause in banking apps'),
+            subtitle: Text(canToggle
+                ? 'Banking and UPI apps block while the counter is on. It switches off while '
+                    'they are open and back on when you leave.'
+                : 'Banking and UPI apps block while the counter is on. It switches off when '
+                    'you open one; tap the notification afterwards to turn it back on.'),
+            value: auto,
+            onChanged: (v) async {
+              await _channel.invokeMethod('setBankingAuto', {'on': v});
+              refresh();
+            },
+          ),
+          if (auto)
+            ListTile(
+              leading: const SizedBox(width: 24),
+              title: const Text('Banking apps'),
+              subtitle: Text(_bankApps == null
+                  ? 'Finding them…'
+                  : _bankApps!.isEmpty
+                      ? 'None found. Tap to choose.'
+                      : _bankApps!.length <= 4
+                          ? _bankApps!.map(_appName).join(', ')
+                          : '${_bankApps!.take(4).map(_appName).join(', ')} +${_bankApps!.length - 4} more'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _chooseBankApps,
+            ),
+          if (canToggle && auto && !usage)
+            ListTile(
+              leading: Icon(Icons.info_outline, color: scheme.error),
+              title: const Text('Allow usage access'),
+              subtitle: const Text(
+                  'So the counter turns back on as soon as you leave the banking app '
+                  '(otherwise after 10 minutes).'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _channel.invokeMethod('openUsageAccess'),
+            ),
+          if (paused)
+            ListTile(
+              leading: Icon(Icons.pause_circle_outline, color: scheme.primary),
+              title: const Text('Paused for banking'),
+              trailing: FilledButton.tonal(
+                onPressed: () async {
+                  await _channel.invokeMethod('resumeFromBanking');
+                  await Future.delayed(const Duration(milliseconds: 600));
+                  refresh();
+                },
+                child: const Text('Resume'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _chooseBankApps() async {
+    final picked = await showModalBottomSheet<List<InstalledApp>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => AppPicker(
+        loadApps: _loadApps,
+        iconBuilder: _pickerIcon,
+        initiallySelected: (_bankApps ?? const []).toSet(),
+        confirmIcon: Icons.check,
+        allowEmpty: true,
+        confirmLabel: (n) => n == 0 ? 'No banking apps' : 'Pause in $n app${n == 1 ? '' : 's'}',
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await _channel.invokeMethod('setBankingApps', {'pkgs': picked.map((a) => a.pkg).toList()});
+    await refresh();
+  }
+
   String _dayLabel(String key, int index) {
     if (index == 0) return 'Today';
     if (index == 1) return 'Yesterday';
@@ -221,6 +311,7 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
         children: [
           if (!_enabled) _enableCard(context),
           if (_enabled) _overlayCard(context),
+          if (_enabled) _bankingCard(context),
           _appsCard(context),
           if (_days.isNotEmpty) ...[
             _todayCard(context),
@@ -526,29 +617,52 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
             Text(showTime ? 'avg ${formatTime(avg)} / day' : 'avg $avg reels / day',
                 style: TextStyle(color: scheme.onSurfaceVariant)),
             const SizedBox(height: 16),
+            // Bars take whatever height is left after the labels, so a large
+            // system font size can't push the chart past its box.
             SizedBox(
-              height: 150,
+              height: 170,
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (var i = 0; i < week.length; i++)
                     Expanded(
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text(label(totals[i]), style: const TextStyle(fontSize: 11)),
-                          const SizedBox(height: 4),
-                          Container(
-                            height: 110 * totals[i] / maxVal + 2,
-                            margin: const EdgeInsets.symmetric(horizontal: 6),
-                            decoration: BoxDecoration(
-                              color: i == week.length - 1 ? scheme.primary : scheme.primary.withValues(alpha: 0.45),
-                              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                            ),
+                          Expanded(
+                            child: LayoutBuilder(builder: (context, box) {
+                              final space = box.maxHeight;
+                              final valueText = Text(label(totals[i]),
+                                  maxLines: 1, overflow: TextOverflow.fade, softWrap: false,
+                                  style: const TextStyle(fontSize: 11));
+                              // Room left for the bar under its value label.
+                              final labelHeight = MediaQuery.textScalerOf(context).scale(11) * 1.5 + 4;
+                              final barRoom = space - labelHeight;
+                              final bar = barRoom <= 0 ? 0.0 : barRoom * totals[i] / maxVal;
+                              return Column(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: valueText)),
+                                  const SizedBox(height: 4),
+                                  Container(
+                                    height: bar < 2 ? 2 : bar,
+                                    margin: const EdgeInsets.symmetric(horizontal: 6),
+                                    decoration: BoxDecoration(
+                                      color: i == week.length - 1
+                                          ? scheme.primary
+                                          : scheme.primary.withValues(alpha: 0.45),
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            }),
                           ),
                           const SizedBox(height: 4),
-                          Text(dayNames[DateTime.parse(week[i].key).weekday - 1],
-                              style: TextStyle(color: scheme.onSurfaceVariant)),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(dayNames[DateTime.parse(week[i].key).weekday - 1],
+                                maxLines: 1, style: TextStyle(color: scheme.onSurfaceVariant)),
+                          ),
                         ],
                       ),
                     ),

@@ -194,7 +194,45 @@ object AppLock {
         "com.josh.app",
     )
 
-    data class App(val pkg: String, val label: String, val category: String, val system: Boolean)
+    data class App(
+        val pkg: String,
+        val label: String,
+        val category: String,
+        val system: Boolean,
+        val sourceDir: String = "", // changes when the app is updated (new icon)
+    )
+
+    /** Rendered icons by package, with the sourceDir they were rendered from. */
+    private val iconCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, ByteArray?>>()
+
+    /**
+     * Every launchable app with its icon, for the app pickers. Icons are cached in memory
+     * (until the app is updated) and rendered on several threads: drawing and compressing
+     * ~200 icons one by one took several seconds.
+     */
+    fun appsForPicker(context: Context): List<Map<String, Any?>> {
+        val apps = launchableApps(context)
+        val missing = apps.filter { iconCache[it.pkg]?.first != it.sourceDir }
+        if (missing.isNotEmpty()) {
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(threads)
+            try {
+                missing.map { a -> pool.submit { iconCache[a.pkg] = a.sourceDir to appIcon(context, a.pkg) } }
+                    .forEach { it.get() }
+            } finally {
+                pool.shutdown()
+            }
+        }
+        return apps.map { a ->
+            mapOf(
+                "pkg" to a.pkg,
+                "label" to a.label,
+                "category" to a.category,
+                "system" to a.system,
+                "icon" to iconCache[a.pkg]?.second,
+            )
+        }
+    }
 
     /**
      * Apps that appear in the launcher (except this one), sorted by name.
@@ -217,7 +255,7 @@ object AppLock {
                 }
                 val system = (info.flags and (ApplicationInfo.FLAG_SYSTEM or
                     ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
-                App(info.packageName, pm.getApplicationLabel(info).toString(), category, system)
+                App(info.packageName, pm.getApplicationLabel(info).toString(), category, system, info.sourceDir ?: "")
             }
             .sortedBy { it.label.lowercase() }
     }

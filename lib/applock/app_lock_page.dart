@@ -63,6 +63,40 @@ class InstalledApp {
   final bool system;
 }
 
+/// The installed apps for the pickers, loaded once and shared by every page
+/// (App Lock, Reels). [prefetch] starts loading in the background so the picker
+/// opens straight away.
+class InstalledApps {
+  static const _channel = MethodChannel('abhi_utility/applock');
+  static Future<List<InstalledApp>>? _future;
+  static DateTime? _loadedAt;
+
+  static Future<List<InstalledApp>> load() => _future ??= _fetch();
+
+  /// Reloads if the list is older than a minute (an app may have been installed);
+  /// icons are cached on the Android side, so a reload is quick.
+  static void prefetch() {
+    final at = _loadedAt;
+    if (_future == null || (at != null && DateTime.now().difference(at) > const Duration(minutes: 1))) {
+      final next = _fetch();
+      // Keep serving the old list until the new one is ready.
+      next.then((_) => _future = next, onError: (_) {});
+      _future ??= next;
+    }
+  }
+
+  static Future<List<InstalledApp>> _fetch() async {
+    try {
+      final raw = await _channel.invokeListMethod<Map>('apps') ?? [];
+      _loadedAt = DateTime.now();
+      return raw.map(InstalledApp.fromMap).toList();
+    } catch (e) {
+      _future = null; // try again next time
+      rethrow;
+    }
+  }
+}
+
 /// Filters in the app picker.
 enum AppFilter {
   all('All'),
@@ -103,7 +137,6 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
 
   /// Uninstall protection: {on, admin, guard, hasPassword} from the native side.
   Map<String, bool> _protection = const {};
-  List<InstalledApp>? _apps;
 
   @override
   void initState() {
@@ -111,6 +144,8 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     DiaryLock.appLockUnlocked.addListener(_onLockChanged);
     refresh();
+    // Load the app list now, so "Add apps" / "Lock all social media" opens at once.
+    InstalledApps.prefetch();
   }
 
   @override
@@ -163,12 +198,7 @@ class AppLockPageState extends State<AppLockPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<List<InstalledApp>> _loadApps() async {
-    if (_apps != null) return _apps!;
-    final raw = await _channel.invokeListMethod<Map>('apps') ?? [];
-    _apps = raw.map(InstalledApp.fromMap).toList();
-    return _apps!;
-  }
+  Future<List<InstalledApp>> _loadApps() => InstalledApps.load();
 
   static String describe(String mode, int minutes) => switch (mode) {
         'daily' => '$minutes min per day',

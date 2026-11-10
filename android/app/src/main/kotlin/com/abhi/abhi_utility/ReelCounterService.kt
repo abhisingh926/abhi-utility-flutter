@@ -67,6 +67,12 @@ class ReelCounterService : AccessibilityService() {
         private const val REPORT_CHANNEL = "reel_report"
         private const val YOUTUBE = "com.google.android.youtube"
 
+        /** Words that, next to "accessibility", make a screen a security warning. */
+        private val WARNING_WORDS = listOf(
+            "disable", "turn off", "switch off", "unsafe", "risk", "harmful", "malicious",
+            "not allowed", "security", "suspicious", "uninstall", "remove",
+        )
+
         /** Windows that sit on top of an app without leaving it. */
         private val IGNORED_PACKAGES = setOf(
             "com.android.systemui",
@@ -328,6 +334,9 @@ class ReelCounterService : AccessibilityService() {
     override fun onServiceConnected() {
         Log.d(TAG, "service connected")
         instance = this
+        BankingMode.onServiceOn(this)
+        // Switched back on while a banking app is still in front: switch off again.
+        if (pauseForBanking(rootInActiveWindow?.packageName?.toString())) return
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -489,6 +498,7 @@ class ReelCounterService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             // Which app is really in front (a keyboard or dialog event shouldn't count).
             val active = rootInActiveWindow?.packageName?.toString() ?: pkg
+            if (pauseForBanking(active)) return
             if (pkg == active && active in GUARD_PACKAGES) {
                 // Screen name (e.g. ...InstalledAppDetails); dialogs/widgets (android.*) keep the page's.
                 event.className?.toString()?.takeIf { !it.startsWith("android.") }?.let { guardScreen = it }
@@ -512,6 +522,38 @@ class ReelCounterService : AccessibilityService() {
         if (fgPkg != pkg && rootInActiveWindow?.packageName?.toString() == pkg) setForeground(pkg)
         if (pkg in reelApps && event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             onScroll(pkg, event)
+        }
+    }
+
+    /**
+     * Banking apps block while this service is on, so it switches itself off while one is
+     * open (BankingMode.kt). Apps with an App Lock rule are skipped: the lock needs the service.
+     */
+    private fun pauseForBanking(pkg: String?): Boolean {
+        if (pkg == null || !BankingMode.isAutoOn(this) || pkg in AppLock.rules(this)) return false
+        if (!BankingMode.isBankApp(this, pkg)) {
+            if (!showsAccessibilityWarning(pkg)) return false
+            BankingMode.learn(this, pkg) // pause in this app from now on
+        }
+        return BankingMode.pause(this, pkg)
+    }
+
+    /**
+     * An app we don't know as a banking app shows a warning about accessibility services
+     * (e.g. "Disable accessibility apps to continue"): it is one, so learn it.
+     */
+    private fun showsAccessibilityWarning(pkg: String): Boolean {
+        if (pkg in GUARD_PACKAGES || pkg in IGNORED_PACKAGES || pkg in reelApps) return false
+        if (pkg.startsWith("com.android.") || pkg.startsWith("com.samsung.") || pkg.startsWith("com.sec.")) return false
+        val root = rootInActiveWindow ?: return false
+        if (root.packageName?.toString() != pkg) return false
+        return try {
+            root.findAccessibilityNodeInfosByText("accessibilit").any { node ->
+                val text = (node.text ?: node.contentDescription)?.toString()?.lowercase() ?: ""
+                WARNING_WORDS.any { it in text }
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

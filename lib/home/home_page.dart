@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../account/api_client.dart';
 import '../app_theme.dart';
 import '../account/backup_button.dart';
+import '../account/profile_page.dart';
 import '../account/subscription_page.dart';
 import '../diary/diary_store.dart';
 import 'app_share.dart';
@@ -239,16 +240,17 @@ class HomePageState extends State<HomePage> {
                 onLongPress: _showFeature,
               ),
 
-          // ---- Share ----
+          // ---- Refer ----
           const SizedBox(height: 20),
           _Panel(
             child: ListTile(
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              leading: _IconBadge(icon: Icons.ios_share, color: scheme.primary),
-              title: const Text('Share Abhi Utility', style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text('Send the app via WhatsApp, Bluetooth or Quick Share'),
+              leading: _IconBadge(icon: Icons.card_giftcard, color: scheme.primary),
+              title: const Text('Refer & earn', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Invite friends with your code and get free months of Pro'),
               trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-              onTap: () => AppShare.shareApk(context),
+              // Profile has the referral code and Invite button (logged out: login first).
+              onTap: () => ProfilePage.open(context),
             ),
           ),
           if (_version.isNotEmpty)

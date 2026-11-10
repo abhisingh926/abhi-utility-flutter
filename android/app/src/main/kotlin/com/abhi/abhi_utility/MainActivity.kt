@@ -100,6 +100,34 @@ class MainActivity : FlutterFragmentActivity() {
                     ReelApps.setCounted(this, call.argument<List<String>>("pkgs") ?: emptyList())
                     result.success(null)
                 }
+                "bankingStatus" -> result.success(BankingMode.status(this))
+                "setBankingAuto" -> {
+                    BankingMode.setAutoOn(this, call.argument<Boolean>("on") ?: true)
+                    result.success(null)
+                }
+                "bankingApps" -> Thread {
+                    val pkgs = BankingMode.installedBankApps(this)
+                    runOnUiThread { result.success(pkgs) }
+                }.start()
+                "setBankingApps" -> {
+                    val pkgs = call.argument<List<String>>("pkgs") ?: emptyList()
+                    Thread { BankingMode.setChosen(this, pkgs); runOnUiThread { result.success(null) } }.start()
+                }
+                "openAccessibility" -> {
+                    startActivity(BankingMode.settingsIntent(this))
+                    result.success(null)
+                }
+                "resumeFromBanking" -> {
+                    BankingMode.resume(this)
+                    result.success(null)
+                }
+                "openUsageAccess" -> {
+                    startActivity(
+                        Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    result.success(null)
+                }
                 "initialTab" -> result.success(intent?.getStringExtra("tab"))
                 else -> result.notImplemented()
             }
@@ -109,15 +137,9 @@ class MainActivity : FlutterFragmentActivity() {
             when (call.method) {
                 // Installed apps with icons; built off the main thread (can take a moment).
                 "apps" -> Thread {
-                    val apps = AppLock.launchableApps(this).map { a ->
-                        mapOf(
-                            "pkg" to a.pkg,
-                            "label" to a.label,
-                            "category" to a.category,
-                            "system" to a.system,
-                            "icon" to AppLock.appIcon(this, a.pkg),
-                        )
-                    }
+                    val t = android.os.SystemClock.elapsedRealtime()
+                    val apps = AppLock.appsForPicker(this)
+                    android.util.Log.d("AppLock", "apps: ${apps.size} in ${android.os.SystemClock.elapsedRealtime() - t} ms")
                     runOnUiThread { result.success(apps) }
                 }.start()
                 "rules" -> Thread {
