@@ -52,8 +52,8 @@ class AbhiUtilityApp extends StatelessWidget {
     return MaterialApp(
       title: 'Abhi Utility',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
+      theme: AppTheme.light(patterned: true),
+      darkTheme: AppTheme.dark(patterned: true),
       home: const HomeShell(),
     );
   }

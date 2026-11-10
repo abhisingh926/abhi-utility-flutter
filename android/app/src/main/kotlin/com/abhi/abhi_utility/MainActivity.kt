@@ -6,6 +6,8 @@ import android.content.Context
 import android.provider.Settings
 import android.content.Intent
 import android.net.Uri
+import java.io.File
+import androidx.core.content.FileProvider
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.os.Build
@@ -229,6 +231,29 @@ class MainActivity : FlutterFragmentActivity() {
         MethodChannel(messenger, "abhi_utility/sos").setMethodCallHandler { call, result ->
             when (call.method) {
                 "status" -> result.success(sosStatus())
+                // SOS history (SosHistory.kt): every SOS, its calls, location SMS and recording.
+                "history" -> result.success(SosHistory.list(this))
+                "clearHistory" -> {
+                    SosHistory.clear(this)
+                    result.success(null)
+                }
+                // A recording that never got uploaded (kept in files/sos) opens in a video player.
+                "openRecording" -> {
+                    val file = File(call.argument<String>("path") ?: "")
+                    val dir = File(filesDir, "sos").canonicalFile
+                    if (!file.exists() || file.canonicalFile.parentFile != dir) {
+                        result.error("NOT_FOUND", "The recording is no longer on this phone", null)
+                    } else try {
+                        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4")
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        )
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("NO_PLAYER", "No app can play this video", null)
+                    }
+                }
                 "setOn" -> {
                     Sos.setOn(this, call.argument<Boolean>("on") ?: false)
                     ReelCounterService.instance?.sos?.refresh()

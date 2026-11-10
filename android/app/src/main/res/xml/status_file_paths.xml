@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- WhatsApp status files opened in another app (StatusSaver.open). -->
+<!-- WhatsApp status files opened in another app (StatusSaver.open), and SOS recordings
+     that weren't uploaded (SOS history → play). -->
 <paths>
     <external-path name="whatsapp_media" path="Android/media/" />
+    <files-path name="sos" path="sos/" />
 </paths>

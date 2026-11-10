@@ -37,6 +37,7 @@ object SosUpload {
         val upload = Sos.upload(c)
         if (upload == null) {
             notify(c, "SOS recording saved on this phone", "Log in to Abhi Utility to upload SOS recordings.")
+            SosHistory.recording(c, "not_logged_in", file)
             return
         }
         notify(c, "SOS: uploading the recording…", "The link will be texted to your SOS contacts.")
@@ -57,17 +58,20 @@ object SosUpload {
                 request(upload, "PUT", "/api/v1/sos/alerts/$token/video", "video/mp4", file)
                 val sent = Sos.smsAll(c, "${Sos.smsOpening(c)} Video + sound recorded on my phone, and my location: $url")
                 notify(c, "SOS recording sent", if (sent > 0) "Link texted to $sent SOS contact(s)." else "Uploaded, but the SMS could not be sent: $url")
+                SosHistory.recording(c, "uploaded", url = url, smsSentTo = sent)
                 file.delete()
                 return
             } catch (e: HttpFail) {
                 Log.w(TAG, "Upload refused: ${e.status} ${e.message}")
                 if (e.status == 409) { // video already there (an earlier try got through)
-                    Sos.smsAll(c, "${Sos.smsOpening(c)} Video + sound recorded on my phone, and my location: $url")
+                    val sent = Sos.smsAll(c, "${Sos.smsOpening(c)} Video + sound recorded on my phone, and my location: $url")
+                    SosHistory.recording(c, "uploaded", url = url, smsSentTo = sent)
                     file.delete()
                     return
                 }
                 if (e.status in 400..499 && e.status != 408 && e.status != 429) {
                     notify(c, "SOS recording not uploaded", if (e.status == 401) "Open Abhi Utility and turn the SOS recording on again." else "The server refused it (${e.status}).")
+                    SosHistory.recording(c, "failed", file, note = if (e.status == 401) "Not uploaded: SOS recording needs to be turned on again." else "Not uploaded: the server refused it (${e.status}).")
                     return // not something a retry fixes; the file stays on the phone
                 }
             } catch (e: Exception) {
@@ -76,6 +80,7 @@ object SosUpload {
             if (attempt < RETRY_DELAYS_S.size) Thread.sleep(RETRY_DELAYS_S[attempt] * 1000)
         }
         notify(c, "SOS recording not uploaded", "No internet connection. The recording is saved on this phone.")
+        SosHistory.recording(c, "failed", file, note = "Not uploaded: no internet connection.")
     }
 
     private class HttpFail(val status: Int, message: String) : Exception(message)

@@ -4,6 +4,7 @@ import '../account/api_client.dart';
 import '../account/profile_page.dart';
 import '../applock/accessibility_disclosure.dart';
 import '../store_build.dart';
+import 'sos_history_page.dart';
 
 const _sosChannel = MethodChannel('abhi_utility/sos');
 
@@ -71,6 +72,7 @@ class SosPageState extends State<SosPage> {
   bool _smsPermissions = false;
   bool _recordPermissions = false;
   int? _uploadUserId;
+  String _historySummary = '';
   List<SosContact> _contacts = [];
   late final AppLifecycleListener _lifecycle;
 
@@ -91,6 +93,13 @@ class SosPageState extends State<SosPage> {
   Future<void> refresh() async {
     _apply(await _channel.invokeMapMethod<String, dynamic>('status'));
     if (_record && await syncSosUploadKey()) _apply(await _channel.invokeMapMethod<String, dynamic>('status'));
+    final summary = sosHistorySummary(await SosHistoryPage.load());
+    if (mounted) setState(() => _historySummary = summary);
+  }
+
+  Future<void> _openHistory() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SosHistoryPage()));
+    refresh(); // history may have been cleared
   }
 
   void _apply(Map<String, dynamic>? s) {
@@ -416,6 +425,21 @@ class SosPageState extends State<SosPage> {
               button: 'Log in',
               onPressed: () => ProfilePage.open(context),
             ),
+
+          // ---- History ----
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 20, 4, 4),
+            child: Text('History', style: Theme.of(context).textTheme.titleMedium),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('SOS history'),
+              subtitle: Text(_historySummary.isEmpty ? 'Calls, location SMS and recordings' : _historySummary),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _openHistory,
+            ),
+          ),
 
           // ---- Practice ----
           Padding(

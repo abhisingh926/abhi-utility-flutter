@@ -299,6 +299,10 @@ class SosController(private val service: AccessibilityService) {
     private var waitingForCall = false
     private var sawOffhook = false
     private var offhookAt = 0L
+    /** This SOS in [SosHistory]. */
+    private var historyId = 0L
+    /** Length of the last call (dialling to hanging up), for the history. */
+    private var callSeconds: Int? = null
     private var callListener: Any? = null
 
     val isActive get() = queue.isNotEmpty()
@@ -455,6 +459,7 @@ class SosController(private val service: AccessibilityService) {
         if (list.isEmpty() || Sos.missingPermissions(service).isNotEmpty()) return
         Log.d(TAG, "SOS triggered, ${list.size} contacts")
         vibrate()
+        historyId = SosHistory.start(service, "gesture")
         queue = list
         next = 0
         hideStrip()
@@ -464,6 +469,7 @@ class SosController(private val service: AccessibilityService) {
 
     /** Stops calling (notification button or the SOS page). */
     fun stop() {
+        if (isActive) SosHistory.finished(service, historyId, "stopped")
         finish()
         notificationManager().cancel(NOTIFICATION_ID)
     }
@@ -487,6 +493,7 @@ class SosController(private val service: AccessibilityService) {
                 if (help) "Sending your location and recording to your SOS contacts." else "Called every SOS contact $ROUNDS times.",
                 ongoing = false
             )
+            SosHistory.finished(service, historyId, "no_answer")
             finish()
             if (help) SosRecordActivity.start(service)
             return
@@ -498,6 +505,8 @@ class SosController(private val service: AccessibilityService) {
         sawOffhook = false
         waitingForCall = true
         callStartedAt = System.currentTimeMillis()
+        callSeconds = null
+        SosHistory.callStarted(service, historyId, c)
         notify("SOS: calling ${c.label}", "Contact $position of ${queue.size}. Tap Stop to end SOS.", ongoing = true)
         try {
             service.startActivity(
@@ -507,18 +516,28 @@ class SosController(private val service: AccessibilityService) {
             handler.postDelayed(noCallTimeout, NO_CALL_TIMEOUT_MS)
         } catch (e: Exception) {
             Log.w(TAG, "Could not call ${c.number}", e)
+            SosHistory.callEnded(service, historyId, "failed")
             handler.postDelayed({ if (isActive) callNext() }, 1000)
         }
     }
 
-    private val noCallTimeout = Runnable { if (isActive && waitingForCall && !sawOffhook) callNext() }
+    private val noCallTimeout = Runnable {
+        if (isActive && waitingForCall && !sawOffhook) {
+            SosHistory.callEnded(service, historyId, "not_connected")
+            callNext()
+        }
+    }
 
     private val checkAnswered = Runnable {
         if (!isActive) return@Runnable
         if (lastCallAnswered()) {
             notify("SOS: ${current?.label ?: "a contact"} answered", "SOS calls stopped.", ongoing = false)
+            SosHistory.callEnded(service, historyId, "answered", callSeconds)
+            SosHistory.finished(service, historyId, "answered")
             finish()
         } else {
+            // Play build: the result was already written when the call ended.
+            if (!BuildConfig.PLAY_STORE) SosHistory.callEnded(service, historyId, "no_answer", callSeconds)
             callNext()
         }
     }
@@ -533,12 +552,17 @@ class SosController(private val service: AccessibilityService) {
             }
             TelephonyManager.CALL_STATE_IDLE -> if (sawOffhook) {
                 waitingForCall = false
+                callSeconds = ((System.currentTimeMillis() - offhookAt) / 1000).toInt()
                 if (!BuildConfig.PLAY_STORE) {
                     handler.postDelayed(checkAnswered, CALL_LOG_DELAY_MS)
                 } else if (System.currentTimeMillis() - offhookAt >= ANSWERED_CALL_MS) {
                     notify("SOS: ${current?.label ?: "a contact"} answered", "SOS calls stopped.", ongoing = false)
+                    SosHistory.callEnded(service, historyId, "answered", callSeconds)
+                    SosHistory.finished(service, historyId, "answered")
                     finish()
                 } else {
+                    // No call log in the Play build: a short call may or may not have been answered.
+                    SosHistory.callEnded(service, historyId, "unconfirmed", callSeconds)
                     notify(
                         "SOS: calling the next contact",
                         "In ${NEXT_CALL_DELAY_MS / 1000} seconds. If ${current?.label ?: "someone"} answered, tap Stop.",

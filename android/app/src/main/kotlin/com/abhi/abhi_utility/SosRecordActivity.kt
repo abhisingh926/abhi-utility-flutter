@@ -153,6 +153,7 @@ class SosRecordActivity : ComponentActivity() {
                 "${Sos.smsOpening(this)} I called you but no one answered. My location could not be found."
             }
             val sent = Sos.smsAll(this, text)
+            SosHistory.locationSent(this, sent, l?.latitude, l?.longitude, l?.takeIf { it.hasAccuracy() }?.accuracy?.toInt())
             setStatus(if (sent > 0) "Location sent to $sent SOS contact(s)." else "Could not send SMS.")
         }
         maybeHandOver()
@@ -169,8 +170,12 @@ class SosRecordActivity : ComponentActivity() {
                 handler.postDelayed({ finish() }, 500)
                 return
             }
+            SosHistory.recording(this, "uploading", file)
             SosUpload.start(this, file, location)
             setStatus("Uploading the recording. The link will be texted to your SOS contacts.")
+        }
+        if (videoFile != null && !dryRun && !(file != null && file.exists() && file.length() > 0)) {
+            SosHistory.recording(this, "no_video", note = "The camera could not record.")
         }
         handler.postDelayed({ finish() }, 500)
     }
