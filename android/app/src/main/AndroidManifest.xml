@@ -115,8 +115,8 @@
              records video + sound (an app on screen may use them; a background one may not). -->
         <activity
             android:name=".SosRecordActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen"
             android:taskAffinity="com.abhi.abhi_utility.sos"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"

@@ -198,21 +198,24 @@ object Sos {
      * True if [pts] (one finger stroke, screen coordinates) look like an "S":
      * starts top-right, sweeps left, right, left while going down, ends bottom-left.
      */
-    fun isS(pts: List<PointF>, minSizePx: Float): Boolean {
-        if (pts.size < 8) return false
+    fun isS(pts: List<PointF>, minSizePx: Float): Boolean = whyNotS(pts, minSizePx) == null
+
+    /** Null when [pts] is an "S", else the reason it isn't (logged to tune the check). */
+    fun whyNotS(pts: List<PointF>, minSizePx: Float): String? {
+        if (pts.size < 8) return "too few points (${pts.size})"
         val minX = pts.minOf { it.x }
         val maxX = pts.maxOf { it.x }
         val minY = pts.minOf { it.y }
         val maxY = pts.maxOf { it.y }
         val w = maxX - minX
         val h = maxY - minY
-        if (h < minSizePx || w < minSizePx * 0.35f) return false
-        if (h < w * 0.6f) return false // too flat for an S
+        if (h < minSizePx || w < minSizePx * 0.35f) return "too small h=${h.toInt()} w=${w.toInt()} min=${minSizePx.toInt()}"
+        if (h < w * 0.6f) return "too flat h=${h.toInt()} w=${w.toInt()}" // too flat for an S
 
         val first = pts.first()
         val last = pts.last()
-        if (first.y > minY + h * 0.35f || last.y < maxY - h * 0.35f) return false // top -> bottom
-        if (first.x < minX + w * 0.35f || last.x > maxX - w * 0.35f) return false // right -> left
+        if (first.y > minY + h * 0.35f || last.y < maxY - h * 0.35f) return "not top->bottom" // top -> bottom
+        if (first.x < minX + w * 0.35f || last.x > maxX - w * 0.35f) return "not right->left" // right -> left
 
         // Mostly downwards.
         var up = 0f
@@ -220,7 +223,7 @@ object Sos {
             val d = pts[i].y - pts[i - 1].y
             if (d < 0) up -= d
         }
-        if (up > h * 0.5f) return false
+        if (up > h * 0.5f) return "too much upward movement"
 
         // Horizontal sweeps (-1 left, +1 right), ignoring wobbles under a quarter of the width.
         val t = w * 0.25f
@@ -238,7 +241,7 @@ object Sos {
             }
         }
         // left-right-left, or with a small hook to the right at the start.
-        return sweeps == listOf(-1, 1, -1) || sweeps == listOf(1, -1, 1, -1)
+        return if (sweeps == listOf(-1, 1, -1) || sweeps == listOf(1, -1, 1, -1)) null else "sweeps=$sweeps"
     }
 }
 
@@ -328,6 +331,9 @@ class SosController(private val service: AccessibilityService) {
     fun refresh() {
         val onLockScreen = power.isInteractive && keyguard.isKeyguardLocked &&
             (windowPkg == null || windowPkg == SYSTEM_UI)
+        Log.d(TAG, "DBG refresh interactive=${power.isInteractive} locked=${keyguard.isKeyguardLocked} " +
+            "pkg=$windowPkg active=$isActive inCall=${inCall()} ready=${Sos.ready(service)} " +
+            "from=${Throwable().stackTrace.getOrNull(1)?.methodName}")
         if (onLockScreen && !isActive && !inCall() && Sos.ready(service)) showStrip() else hideStrip()
     }
 
@@ -402,6 +408,7 @@ class SosController(private val service: AccessibilityService) {
         override fun onTouchEvent(e: MotionEvent): Boolean {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    Log.d(TAG, "stroke started on the SOS strip")
                     clear()
                     path.moveTo(e.x, e.y)
                     pts += PointF(e.x, e.y)
@@ -411,7 +418,9 @@ class SosController(private val service: AccessibilityService) {
                     add(e.x, e.y)
                 }
                 MotionEvent.ACTION_UP -> {
-                    val isS = Sos.isS(pts, dp(80f))
+                    val why = Sos.whyNotS(pts, dp(80f))
+                    Log.d(TAG, "stroke on lock screen: ${why ?: "S recognised"}")
+                    val isS = why == null
                     clear()
                     if (isS) trigger()
                 }

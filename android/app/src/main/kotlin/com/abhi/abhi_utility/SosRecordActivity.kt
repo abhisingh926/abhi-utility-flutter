@@ -4,8 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Color
-import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -14,15 +15,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import android.view.Gravity
-import android.view.ViewGroup
+import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
@@ -32,13 +28,15 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
-import androidx.camera.view.PreviewView
 import java.io.File
 import java.util.Locale
 
 /**
- * SOS, after no contact answered: shown over the lock screen (an app on screen may use
- * the camera, microphone and location, a background service may not).
+ * SOS, after no contact answered. An invisible screen over the lock screen: nothing is
+ * shown (no preview, no text), so whoever holds the phone doesn't see that it records.
+ * It still counts as an app on screen, which Android requires for using the camera,
+ * microphone and location (a background service may not). Android's own camera / mic
+ * privacy dot still appears in the corner; apps can't hide that.
  *
  *  1. Finds the current location and texts it to every SOS contact.
  *  2. Records [Sos.RECORD_SECONDS] of video with sound.
@@ -49,6 +47,9 @@ class SosRecordActivity : ComponentActivity() {
     companion object {
         private const val TAG = "SosRecord"
         private const val EXTRA_STARTED = "startedAt"
+
+        /** Debug builds only: record without texting or uploading (for testing). */
+        private const val EXTRA_DRY_RUN = "dryRun"
 
         /** Wait this long for a good location fix, then use the best one so far. */
         private const val LOCATION_TIMEOUT_MS = 20_000L
@@ -74,9 +75,8 @@ class SosRecordActivity : ComponentActivity() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var status: TextView
-    private lateinit var timer: TextView
-    private lateinit var preview: PreviewView
+    private val dryRun get() =
+        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0 && intent.getBooleanExtra(EXTRA_DRY_RUN, false)
 
     private var started = false
     private var location: Location? = null
@@ -97,48 +97,19 @@ class SosRecordActivity : ComponentActivity() {
         if (savedInstanceState == null) begin()
     }
 
-    // ---- UI -------------------------------------------------------------------------------
+    // ---- UI: none -------------------------------------------------------------------------
 
     private fun buildUi() {
-        val density = resources.displayMetrics.density
-        preview = PreviewView(this).apply {
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-        }
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(200, 183, 28, 28))
-            val pad = (20 * density).toInt()
-            setPadding(pad, pad * 2, pad, pad)
-        }
-        TextView(this).apply {
-            text = "SOS"
-            setTextColor(Color.WHITE)
-            textSize = 28f
-            typeface = Typeface.DEFAULT_BOLD
-            panel.addView(this)
-        }
-        status = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 17f
-            panel.addView(this)
-        }
-        timer = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            panel.addView(this)
-        }
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        root.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(
-            panel,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
-        )
-        setContentView(root)
+        // Fully transparent, and touches go through to the lock screen below.
+        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+        window.setDimAmount(0f)
+        setContentView(View(this))
     }
 
+    /** Progress goes to the log only: nothing on screen. */
     private fun setStatus(text: String) {
-        status.text = text
+        Log.d(TAG, text)
     }
 
     // ---- Flow -----------------------------------------------------------------------------
@@ -158,7 +129,7 @@ class SosRecordActivity : ComponentActivity() {
         if (locationDone) return
         locationDone = true
         stopLocation()
-        if (Sos.smsLocation(this)) {
+        if (Sos.smsLocation(this) && !dryRun) {
             val l = location
             val text = if (l != null) {
                 "${Sos.smsOpening(this)} I called you but no one answered. My location: ${mapsLink(l)}" +
@@ -178,10 +149,15 @@ class SosRecordActivity : ComponentActivity() {
         handedOver = true
         val file = videoFile
         if (file != null && file.exists() && file.length() > 0) {
+            if (dryRun) {
+                setStatus("Dry run: recorded ${file.length()} bytes to $file (not uploaded)")
+                handler.postDelayed({ finish() }, 500)
+                return
+            }
             SosUpload.start(this, file, location)
             setStatus("Uploading the recording. The link will be texted to your SOS contacts.")
         }
-        handler.postDelayed({ finish() }, 4000)
+        handler.postDelayed({ finish() }, 500)
     }
 
     // ---- Location -------------------------------------------------------------------------
@@ -243,7 +219,6 @@ class SosRecordActivity : ComponentActivity() {
         future.addListener({
             try {
                 val provider = future.get()
-                val previewUse = Preview.Builder().build().also { it.surfaceProvider = preview.surfaceProvider }
                 val recorder = Recorder.Builder()
                     .setQualitySelector(
                         // ~480p keeps 30 s at a few MB: quick to upload on a weak connection.
@@ -256,7 +231,7 @@ class SosRecordActivity : ComponentActivity() {
                     else -> CameraSelector.DEFAULT_FRONT_CAMERA
                 }
                 provider.unbindAll()
-                provider.bindToLifecycle(this, camera, previewUse, capture)
+                provider.bindToLifecycle(this, camera, capture) // no preview: nothing on screen
 
                 val dir = File(filesDir, "sos").apply { mkdirs() }
                 val file = File(dir, "sos-${System.currentTimeMillis()}.mp4")
@@ -267,14 +242,13 @@ class SosRecordActivity : ComponentActivity() {
                     when (event) {
                         is VideoRecordEvent.Start -> {
                             recordStartedAt = SystemClock.elapsedRealtime()
-                            tick()
                             handler.postDelayed({ recording?.stop() }, Sos.RECORD_SECONDS * 1000L)
                         }
                         is VideoRecordEvent.Finalize -> {
                             if (event.hasError()) Log.w(TAG, "Recording ended with error ${event.error}", event.cause)
                             recording = null
                             recordDone = true
-                            timer.text = "Recording finished."
+                            setStatus("Recording finished.")
                             try {
                                 provider.unbindAll()
                             } catch (_: Exception) {
@@ -285,18 +259,11 @@ class SosRecordActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Could not record", e)
-                timer.text = "Could not start the camera."
+                setStatus("Could not start the camera.")
                 recordDone = true
                 maybeHandOver()
             }
         }, mainExecutor)
-    }
-
-    private fun tick() {
-        if (recording == null) return
-        val left = Sos.RECORD_SECONDS - ((SystemClock.elapsedRealtime() - recordStartedAt) / 1000).toInt()
-        timer.text = "● Recording video and sound… ${left.coerceAtLeast(0)} s"
-        handler.postDelayed({ tick() }, 500)
     }
 
     override fun onDestroy() {
