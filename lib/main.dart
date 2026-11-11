@@ -359,7 +359,9 @@ class _HomeShellState extends State<HomeShell> {
               builder: (context, user, _) => IconButton(
                 tooltip: user == null ? 'Login / Register' : 'Profile',
                 // Logged in: their profile photo (or initial).
-                icon: user == null ? const Icon(Icons.account_circle_outlined) : const UserAvatar(radius: 14),
+                // 36 px (was 28): easier to see and tap.
+                padding: const EdgeInsets.all(6),
+                icon: user == null ? const Icon(Icons.account_circle_outlined, size: 34) : const UserAvatar(radius: 18),
                 onPressed: _openAccount,
               ),
             ),

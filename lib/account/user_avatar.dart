@@ -110,3 +110,40 @@ Uint8List _squareJpeg(Uint8List original) {
   final small = size > 512 ? img.copyResize(square, width: 512, height: 512, interpolation: img.Interpolation.average) : square;
   return Uint8List.fromList(img.encodeJpg(small, quality: 85));
 }
+
+// ---- Crop (AvatarCropPage) -------------------------------------------------------------
+
+/// A photo ready for the crop screen: upright (EXIF rotation applied) and at most
+/// 2000 px, so on-screen coordinates map straight to these pixels.
+typedef CropSource = ({Uint8List bytes, int width, int height});
+
+Future<CropSource> prepareCropSource(Uint8List original) => Isolate.run(() {
+      final decoded = img.decodeImage(original);
+      if (decoded == null) throw const FormatException("This photo's format isn't supported");
+      var upright = img.bakeOrientation(decoded);
+      final longest = upright.width > upright.height ? upright.width : upright.height;
+      if (longest > 2000) {
+        upright = upright.width >= upright.height
+            ? img.copyResize(upright, width: 2000, interpolation: img.Interpolation.average)
+            : img.copyResize(upright, height: 2000, interpolation: img.Interpolation.average);
+      }
+      return (bytes: Uint8List.fromList(img.encodeJpg(upright, quality: 92)), width: upright.width, height: upright.height);
+    });
+
+/// [source] turned 90° clockwise (the crop screen's rotate button).
+Future<CropSource> rotateCropSource(CropSource source) => Isolate.run(() {
+      final decoded = img.decodeImage(source.bytes)!;
+      final turned = img.copyRotate(decoded, angle: 90);
+      return (bytes: Uint8List.fromList(img.encodeJpg(turned, quality: 92)), width: turned.width, height: turned.height);
+    });
+
+/// The square at ([x], [y]) of [size] px in [source], as a ≤512 px JPEG for upload.
+Future<Uint8List> croppedAvatarJpeg(CropSource source, int x, int y, int size) => Isolate.run(() {
+      final decoded = img.decodeImage(source.bytes)!;
+      final s = size.clamp(1, decoded.width < decoded.height ? decoded.width : decoded.height);
+      final cx = x.clamp(0, decoded.width - s);
+      final cy = y.clamp(0, decoded.height - s);
+      final square = img.copyCrop(decoded, x: cx, y: cy, width: s, height: s);
+      final small = s > 512 ? img.copyResize(square, width: 512, height: 512, interpolation: img.Interpolation.average) : square;
+      return Uint8List.fromList(img.encodeJpg(small, quality: 88));
+    });

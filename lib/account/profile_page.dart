@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'account_page.dart';
 import 'api_client.dart';
+import 'avatar_crop_page.dart';
 import 'legal_links.dart';
 import 'subscription_page.dart';
 import 'user_avatar.dart';
@@ -120,7 +121,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   // ---- Actions -------------------------------------------------------------------------
 
-  /// Gallery / camera / remove, then upload a square 512 px JPEG.
+  /// Gallery / camera / remove; a new photo is cropped (AvatarCropPage), then uploaded as a ≤512 px JPEG.
   Future<void> _changePhoto() async {
     final hasPhoto = _api.user.value?.avatarVersion != null;
     final choice = await showModalBottomSheet<String>(
@@ -181,7 +182,10 @@ class _ProfilePageState extends State<ProfilePage> {
     if (file == null || !mounted) return;
     setState(() => _photoBusy = true);
     try {
-      final jpeg = await squareAvatarJpeg(await file.readAsBytes());
+      final source = await prepareCropSource(await file.readAsBytes());
+      if (!mounted) return;
+      final jpeg = await AvatarCropPage.open(context, source);
+      if (jpeg == null || !mounted) return; // cancelled
       final version = await _api.uploadAvatar(jpeg);
       final id = _api.user.value?.id;
       if (version != null && id != null) await AvatarCache.remember(id, version, jpeg); // no re-download
@@ -381,16 +385,16 @@ class _ProfilePageState extends State<ProfilePage> {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                const UserAvatar(radius: 44),
+                const UserAvatar(radius: 56),
                 if (_photoBusy)
-                  const SizedBox(width: 88, height: 88, child: CircularProgressIndicator(strokeWidth: 3)),
+                  const SizedBox(width: 112, height: 112, child: CircularProgressIndicator(strokeWidth: 3)),
                 Positioned(
                   right: 0,
                   bottom: 0,
                   child: CircleAvatar(
-                    radius: 15,
+                    radius: 18,
                     backgroundColor: scheme.primary,
-                    child: Icon(Icons.photo_camera, size: 16, color: scheme.onPrimary),
+                    child: Icon(Icons.photo_camera, size: 19, color: scheme.onPrimary),
                   ),
                 ),
               ],
