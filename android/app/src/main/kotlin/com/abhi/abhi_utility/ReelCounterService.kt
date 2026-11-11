@@ -318,6 +318,7 @@ class ReelCounterService : AccessibilityService() {
                 Intent.ACTION_SCREEN_OFF -> {
                     guardUnlockedUntil = 0 // protected screens need the password again
                     hideGuard()
+                    listenForContentChanges(null)
                     setForeground(null)
                     anyForegroundPkg = null
                     updateBubble()
@@ -503,6 +504,7 @@ class ReelCounterService : AccessibilityService() {
                 // Screen name (e.g. ...InstalledAppDetails); dialogs/widgets (android.*) keep the page's.
                 event.className?.toString()?.takeIf { !it.startsWith("android.") }?.let { guardScreen = it }
             }
+            listenForContentChanges(active)
             checkUninstallGuard(active)
             sos?.onWindowChanged(active)
             // While the fingerprint prompt is up (and just after), the locked app is still
@@ -563,7 +565,15 @@ class ReelCounterService : AccessibilityService() {
         lockRules = AppLock.rules(this) // the user may have changed them in the app
         reelApps = ReelApps.counted(this)
         val next = pkg?.takeIf { isTracked(it) }
-        if (next == fgPkg) return
+        if (next == fgPkg) {
+            // Polling stops while the notification shade covers YouTube; back in YouTube
+            // the foreground app hasn't changed, so restart it here.
+            if (next == YOUTUBE && next in reelApps && !polling) {
+                polling = true
+                handler.post(pollTask)
+            }
+            return
+        }
         saveTime()
         fgPkg = next
         handler.removeCallbacks(tickTask)
@@ -1047,6 +1057,24 @@ class ReelCounterService : AccessibilityService() {
     }
 
     private fun guardOn() = UninstallProtection.isOn(this) && UninstallProtection.hasAnyPassword(this)
+
+    /** Whether content-change events are currently subscribed (see reel_counter_config.xml). */
+    private var contentEvents = false
+
+    /**
+     * Content changes are only needed by the uninstall guard (Settings pages load bit by bit),
+     * so they are subscribed only while a guarded app is in front. Otherwise every UI update
+     * of every app (videos, timers, feeds) would be sent here just to be ignored.
+     */
+    private fun listenForContentChanges(active: String?) {
+        val want = active != null && active in GUARD_PACKAGES && guardOn()
+        if (want == contentEvents) return
+        val info = serviceInfo ?: return
+        val type = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        info.eventTypes = if (want) info.eventTypes or type else info.eventTypes and type.inv()
+        serviceInfo = info
+        contentEvents = want
+    }
 
     private fun scheduleGuardCheck() {
         if (guardCheckPending || !guardOn()) return

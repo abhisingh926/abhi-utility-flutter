@@ -189,8 +189,12 @@ class _ZipViewerScreenState extends State<ZipViewerScreen> {
       if (!mounted) return;
       String? text;
       if (isText) {
-        final bytes = await File(file).readAsBytes();
-        text = const Utf8Decoder(allowMalformed: true).convert(bytes.take(300 * 1024).toList());
+        final raf = await File(file).open();
+        try {
+          text = const Utf8Decoder(allowMalformed: true).convert(await raf.read(300 * 1024));
+        } finally {
+          await raf.close();
+        }
       }
       if (!mounted) return;
       await Navigator.push(
@@ -374,10 +378,10 @@ class _ZipViewerScreenState extends State<ZipViewerScreen> {
     final total = (_entries ?? []).fold<int>(0, (s, e) => s + e.size);
     final zipped = (_entries ?? []).fold<int>(0, (s, e) => s + e.compressed);
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 96),
-      children: [
-        Padding(
+    // Rows are built only when scrolled into view: a zip with thousands of entries used
+    // to build every row (and count every folder's files) on each tap.
+    final rows = <Widget Function()>[
+        () => Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: Text(
             '${all.length} files · ${ZipService.formatSize(total)}'
@@ -387,7 +391,7 @@ class _ZipViewerScreenState extends State<ZipViewerScreen> {
           ),
         ),
         if (_dir.isNotEmpty)
-          ListTile(
+          () => ListTile(
             leading: const Icon(Icons.arrow_upward),
             title: Text('/$_dir', maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: const Text('Back'),
@@ -398,7 +402,7 @@ class _ZipViewerScreenState extends State<ZipViewerScreen> {
             }),
           ),
         for (final f in c.folders)
-          Builder(builder: (context) {
+          () {
             final prefix = '$_dir$f/';
             final files = _filesUnder(prefix);
             final sel = files.isNotEmpty && files.every(_selected.contains);
@@ -411,9 +415,9 @@ class _ZipViewerScreenState extends State<ZipViewerScreen> {
               onTap: () => _selected.isEmpty ? setState(() => _dir = prefix) : _toggle(files, !sel),
               onLongPress: () => _toggle(files, !sel),
             );
-          }),
+          },
         for (final e in c.files)
-          ListTile(
+          () => ListTile(
             leading: Icon(_iconFor(e.name)),
             title: Text(_base(e.name), maxLines: 2, overflow: TextOverflow.ellipsis),
             subtitle: Text(ZipService.formatSize(e.size)),
@@ -434,8 +438,12 @@ class _ZipViewerScreenState extends State<ZipViewerScreen> {
             onLongPress: () => _toggle([e.name], !_selected.contains(e.name)),
           ),
         if (c.folders.isEmpty && c.files.isEmpty)
-          const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('This zip is empty'))),
-      ],
+          () => const Padding(padding: EdgeInsets.all(32), child: Center(child: Text('This zip is empty'))),
+    ];
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 96),
+      itemCount: rows.length,
+      itemBuilder: (context, i) => rows[i](),
     );
   }
 

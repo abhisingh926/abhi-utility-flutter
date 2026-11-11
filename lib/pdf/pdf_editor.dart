@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:isolate';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -53,12 +55,17 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   Future<void> _open() async {
     try {
       final doc = await PdfDocument.openFile(widget.path);
+      if (!mounted) {
+        doc.dispose();
+        return;
+      }
       _docs.add(doc);
       setState(() {
         _items.addAll(doc.pages.map(_Item.new));
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = 'Could not open this PDF: $e';
         _loading = false;
@@ -162,15 +169,16 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     setState(() => _saving = true);
     try {
       for (final f in files) {
-        final decoded = img.decodeImage(await File(f.path).readAsBytes());
-        if (decoded == null) continue;
-        final jpeg = img.encodeJpg(decoded, quality: 85);
+        final bytes = await File(f.path).readAsBytes();
+        // Decoding / re-encoding a 2200 px photo takes ~0.5–1 s: do it off the UI thread.
+        final photo = await _photoToJpeg(bytes);
+        if (photo == null) continue;
         // Page as wide as A4 (595 pt), height following the photo.
         const width = 595.0;
         final doc = await PdfDocument.createFromJpegData(
-          jpeg,
+          photo.jpeg,
           width: width,
-          height: width * decoded.height / decoded.width,
+          height: width * photo.h / photo.w,
           sourceName: 'photo-${DateTime.now().microsecondsSinceEpoch}',
         );
         _docs.add(doc);
@@ -431,3 +439,10 @@ class _ThumbMarks extends CustomPainter {
   @override
   bool shouldRepaint(_ThumbMarks old) => true;
 }
+
+/// Any photo → JPEG (quality 85) with its size, on a background isolate (null if unreadable).
+Future<({Uint8List jpeg, int w, int h})?> _photoToJpeg(Uint8List bytes) => Isolate.run(() {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return null;
+      return (jpeg: img.encodeJpg(decoded, quality: 85), w: decoded.width, h: decoded.height);
+    });

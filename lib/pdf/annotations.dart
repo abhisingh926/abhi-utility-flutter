@@ -1,3 +1,5 @@
+import 'dart:isolate';
+import 'dart:typed_data';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -181,13 +183,15 @@ Future<PdfDocument> flattenPage(PdfPage page, PageAnnotations a, String id) asyn
   final bytes = await composed.toByteData(format: ui.ImageByteFormat.rawRgba);
   composed.dispose();
 
-  final image = img.Image.fromBytes(
-    width: w,
-    height: h,
-    bytes: bytes!.buffer,
-    numChannels: 4,
-    order: img.ChannelOrder.rgba,
-  );
-  final jpeg = img.encodeJpg(image, quality: 90);
+  // Encoding a ~1500×2100 page in Dart takes up to a second: do it off the UI thread.
+  final rgba = bytes!.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
+  final jpeg = await _rgbaToJpegInBackground(rgba, w, h);
   return PdfDocument.createFromJpegData(jpeg, width: page.width, height: page.height, sourceName: 'flat-$id');
 }
+
+/// RGBA pixels → JPEG (quality 90) on a background isolate. Top-level, so the isolate
+/// closure only captures these arguments.
+Future<Uint8List> _rgbaToJpegInBackground(Uint8List rgba, int w, int h) => Isolate.run(() => img.encodeJpg(
+      img.Image.fromBytes(width: w, height: h, bytes: rgba.buffer, numChannels: 4, order: img.ChannelOrder.rgba),
+      quality: 90,
+    ));

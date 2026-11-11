@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Scroll and screen-change events. No package filter: the service needs to know
      when a social app is left, but for other apps it only reads the package name.
-     Content changes are only looked at in Settings / the package installer
-     (uninstall protection); every other app's are ignored straight away. -->
+     Content changes are NOT listed here: every app's UI updates would be sent to us.
+     The service subscribes to them at runtime only while Settings / the package
+     installer is in front and uninstall protection is on (ReelCounterService). -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewScrolled|typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeViewScrolled|typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds"
     android:canRetrieveWindowContent="true"

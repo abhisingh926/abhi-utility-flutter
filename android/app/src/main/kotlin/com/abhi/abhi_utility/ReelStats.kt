@@ -33,12 +33,16 @@ object ReelApps {
     private const val KEY_COUNTED = "counted"
 
     /** Apps whose reels are counted (and which show the counter on top). */
+    @Volatile private var countedCache: Pair<String, Set<String>>? = null
+
+    /** Apps whose reels are counted (parsed again only when the choice changed). */
     fun counted(context: Context): Set<String> {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_COUNTED, null)
             ?: return NAMES.keys
+        countedCache?.let { if (it.first == raw) return it.second }
         return try {
             val arr = JSONArray(raw)
-            (0 until arr.length()).map { arr.getString(it) }.toSet()
+            (0 until arr.length()).map { arr.getString(it) }.toSet().also { countedCache = raw to it }
         } catch (_: Exception) {
             NAMES.keys
         }

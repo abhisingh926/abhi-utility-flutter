@@ -775,6 +775,14 @@ class _AppPickerState extends State<AppPicker> {
       builder: (context, scroll) => FutureBuilder<List<InstalledApp>>(
         future: _future,
         builder: (context, snap) {
+          if (snap.hasError) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('Could not list your apps. Close this and try again.', textAlign: TextAlign.center),
+              ),
+            );
+          }
           if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }

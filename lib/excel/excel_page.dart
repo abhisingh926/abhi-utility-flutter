@@ -99,21 +99,24 @@ class FileTabPageState extends State<FileTabPage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// Back from the "All files access" settings page: list the files.
+  /// Back from the "All files access" settings page: list the files. Any other return
+  /// to the app keeps the list (both the Excel and Docs pages stay alive once opened, and
+  /// each scan walks the whole phone); opening the tab or the refresh button rescans.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) refresh();
+    if (state == AppLifecycleState.resumed) refresh(rescan: false);
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh({bool rescan = true}) async {
     final recent = await _store.recents();
     final access = await _store.hasAllFilesAccess();
     if (!mounted) return;
+    final newlyAllowed = access && !_access;
     setState(() {
       _recent = recent;
       _access = access;
     });
-    if (access) await _scan();
+    if (access && (rescan || newlyAllowed || _all == null)) await _scan();
   }
 
   Future<void> _scan() async {
@@ -123,6 +126,8 @@ class FileTabPageState extends State<FileTabPage> with WidgetsBindingObserver {
       final all = await _store.scan();
       if (mounted) setState(() => _all = all);
     } catch (e) {
+      // Show the (empty) list instead of an endless spinner; the refresh button retries.
+      if (mounted) setState(() => _all ??= const []);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not list files: $e')));
     } finally {
       if (mounted) setState(() => _scanning = false);

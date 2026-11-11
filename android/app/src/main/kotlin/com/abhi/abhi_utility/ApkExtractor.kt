@@ -36,7 +36,11 @@ object ApkExtractor {
         ""
     }
 
-    /** Launchable apps with size and version (runs on a background thread). */
+    /**
+     * Launchable apps with size and version (runs on a background thread). No icons:
+     * drawing + PNG-encoding every icon took seconds, so the page loads them per row
+     * with [icon] as they scroll into view.
+     */
     fun list(activity: Activity, includeSystem: Boolean): List<Map<String, Any?>> {
         val pm = activity.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -49,24 +53,26 @@ object ApkExtractor {
                 if (system && !includeSystem) return@mapNotNull null
                 val files = parts(info)
                 @Suppress("DEPRECATION")
-                val installed = try {
-                    pm.getPackageInfo(info.packageName, 0).lastUpdateTime
+                val pkgInfo = try {
+                    pm.getPackageInfo(info.packageName, 0)
                 } catch (_: Exception) {
-                    0L
+                    null
                 }
                 mapOf(
                     "pkg" to info.packageName,
                     "label" to pm.getApplicationLabel(info).toString(),
-                    "version" to versionName(activity, info.packageName),
+                    "version" to (pkgInfo?.versionName ?: ""),
                     "size" to files.sumOf { it.length() },
                     "split" to (files.size > 1),
                     "system" to system,
-                    "updated" to installed,
-                    "icon" to AppLock.appIcon(activity, info.packageName),
+                    "updated" to (pkgInfo?.lastUpdateTime ?: 0L),
                 )
             }
             .sortedBy { (it["label"] as String).lowercase() }
     }
+
+    /** Icons are drawn a few at a time off the main thread. */
+    val iconPool: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newFixedThreadPool(3)
 
     /**
      * Saves the app to Downloads/AbhiUtility/APKs (replacing an older copy with the

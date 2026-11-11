@@ -268,6 +268,9 @@ class BankingPauseService : Service() {
         private const val NOTIFICATION_ID = 4711
         private const val ACTION_RESUME = "resume"
         private const val CHECK_MS = 1500L
+
+        /** With the screen off nobody can switch apps; check rarely to save battery. */
+        private const val CHECK_SCREEN_OFF_MS = 15_000L
         private const val FALLBACK_MS = 10 * 60_000L
     }
 
@@ -297,7 +300,8 @@ class BankingPauseService : Service() {
                 BankingMode.resume(this@BankingPauseService)
                 return
             }
-            handler.postDelayed(this, CHECK_MS)
+            val screenOn = (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
+            handler.postDelayed(this, if (screenOn) CHECK_MS else CHECK_SCREEN_OFF_MS)
         }
     }
 

@@ -459,36 +459,42 @@ class _DocViewerState extends State<DocViewer> {
   }
 
   /// White "paper" with the document on it (documents assume black text on white).
+  /// Built lazily, block by block: a long document used to lay out (and, while editing,
+  /// rebuild every TextField of) the whole file at once.
   Widget _page() {
-    final children = _editing ? _editItems(_items) : _viewBlocks(_doc!.blocks);
+    var children = _editing ? _editItems(_items) : _viewBlocks(_doc!.blocks);
+    if (children.isEmpty) children = [const Text('This document is empty', style: TextStyle(color: Colors.black45))];
+    final last = children.length - 1;
     return Theme(
       data: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true, brightness: Brightness.light),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(8, 12, 8, 32),
-        children: [
-          Center(
+      child: DefaultTextStyle(
+        style: const TextStyle(color: Colors.black87, height: 1.35),
+        child: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(8, 12, 8, 32),
+          itemCount: children.length,
+          itemBuilder: (context, i) => Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 820),
-              child: Material(
-                color: Colors.white,
-                elevation: 1,
-                borderRadius: BorderRadius.circular(4),
+              // One strip of the paper per block; rounded at the top and bottom of the page.
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(
+                    top: i == 0 ? const Radius.circular(4) : Radius.zero,
+                    bottom: i == last ? const Radius.circular(4) : Radius.zero,
+                  ),
+                ),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
-                  child: DefaultTextStyle(
-                    style: const TextStyle(color: Colors.black87, height: 1.35),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: children.isEmpty
-                          ? [const Text('This document is empty', style: TextStyle(color: Colors.black45))]
-                          : children,
-                    ),
+                  padding: EdgeInsets.fromLTRB(20, i == 0 ? 24 : 0, 20, i == last ? 32 : 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [children[i]],
                   ),
                 ),
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -526,7 +532,12 @@ class _DocViewerState extends State<DocViewer> {
         spans.add(WidgetSpan(
           child: LayoutBuilder(builder: (context, c) {
             final w = math.min(r.imageWidth ?? c.maxWidth, c.maxWidth);
-            return Image.memory(r.image!, width: w, fit: BoxFit.contain, errorBuilder: (_, _, _) => const Icon(Icons.broken_image));
+            // Decoded at the size shown, not the camera's 12 MP (~48 MB each).
+            return Image.memory(r.image!,
+                width: w,
+                cacheWidth: w.isFinite && w >= 1 ? (w * MediaQuery.devicePixelRatioOf(context)).round() : null,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => const Icon(Icons.broken_image));
           }),
         ));
         continue;
@@ -636,7 +647,11 @@ class _DocViewerState extends State<DocViewer> {
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Opacity(
                 opacity: 0.85,
-                child: Image.memory(r.image!, height: 120, fit: BoxFit.contain, errorBuilder: (_, _, _) => const SizedBox()),
+                child: Image.memory(r.image!,
+                    height: 120,
+                    cacheHeight: (120 * MediaQuery.devicePixelRatioOf(context)).round(),
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => const SizedBox()),
               ),
             ),
           Row(

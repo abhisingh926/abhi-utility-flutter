@@ -22,6 +22,9 @@ import io.flutter.plugin.common.MethodChannel
  *  - "abhi_utility/torch":   stream of torch on/off state
  */
 class MainActivity : FlutterFragmentActivity() {
+    /** Status Saver thumbnails, a few at a time. */
+    private val thumbPool = java.util.concurrent.Executors.newFixedThreadPool(3)
+
 
     private lateinit var cameraManager: CameraManager
     private var cameraId: String? = null
@@ -30,6 +33,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        CacheCleaner.cleanInBackground(this)
         cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         cameraId = findFlashCamera(cameraManager)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
@@ -151,7 +155,7 @@ class MainActivity : FlutterFragmentActivity() {
                         mapOf(
                             "pkg" to pkg,
                             "label" to AppLock.appLabel(this, pkg),
-                            "icon" to AppLock.appIcon(this, pkg),
+                            "icon" to AppLock.cachedIcon(this, pkg),
                             "mode" to rule.mode,
                             "minutes" to rule.minutes,
                             "usedSeconds" to s.usedSeconds,
@@ -405,6 +409,13 @@ class MainActivity : FlutterFragmentActivity() {
                         runOnUiThread { result.error("EXPORT_FAILED", e.message, null) }
                     }
                 }.start()
+                "icon" -> {
+                    val pkg = call.argument<String>("pkg")!!
+                    ApkExtractor.iconPool.execute {
+                        val png = AppLock.appIcon(this, pkg)
+                        runOnUiThread { result.success(png) }
+                    }
+                }
                 "appInfo" -> {
                     ApkExtractor.openAppInfo(this, call.argument<String>("pkg")!!)
                     result.success(null)
@@ -586,10 +597,15 @@ class MainActivity : FlutterFragmentActivity() {
                         val list = try { StatusSaver.list(this, business) } catch (e: Exception) { null }
                         runOnUiThread { result.success(list) }
                     }.start()
-                    "thumb" -> Thread {
-                        val bytes = StatusSaver.thumbnail(this, call.argument<String>("uri")!!, call.argument<Boolean>("video") ?: false)
+                    // A shared pool: a folder of 100+ statuses used to start 100+ threads at once.
+                    "thumb" -> thumbPool.execute {
+                        val bytes = try {
+                            StatusSaver.thumbnail(this, call.argument<String>("uri")!!, call.argument<Boolean>("video") ?: false)
+                        } catch (e: Exception) {
+                            null
+                        }
                         runOnUiThread { result.success(bytes) }
-                    }.start()
+                    }
                     "save" -> Thread {
                         try {
                             val where = StatusSaver.save(this, call.argument<String>("uri")!!, call.argument<String>("name")!!, call.argument<String>("mime")!!)

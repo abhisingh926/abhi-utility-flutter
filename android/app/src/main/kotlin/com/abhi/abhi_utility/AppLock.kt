@@ -104,13 +104,19 @@ object AppLock {
         prefs.edit().putString(KEY_BONUS, json.toString()).apply()
     }
 
+    /** Last parsed rules and the JSON they came from (read on every app switch and tick). */
+    @Volatile private var rulesCache: Pair<String, Map<String, Rule>>? = null
+
     fun rules(context: Context): Map<String, Rule> {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_RULES, "{}")!!
+        rulesCache?.let { if (it.first == raw) return it.second }
         val json = JSONObject(raw)
-        return json.keys().asSequence().associateWith {
+        val rules = json.keys().asSequence().associateWith {
             val r = json.getJSONObject(it)
             Rule(r.optString("mode", "block"), r.optInt("minutes", 0))
         }
+        rulesCache = raw to rules
+        return rules
     }
 
     fun setRule(context: Context, pkg: String, rule: Rule?) {
@@ -154,12 +160,21 @@ object AppLock {
         set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
     }.timeInMillis
 
-    fun appLabel(context: Context, pkg: String): String = try {
-        val pm = context.packageManager
-        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-    } catch (_: PackageManager.NameNotFoundException) {
-        ReelApps.NAMES[pkg] ?: pkg
+    private val labelCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** App name (cached: the reel counter overlay asks every second). */
+    fun appLabel(context: Context, pkg: String): String = labelCache.getOrPut(pkg) {
+        try {
+            val pm = context.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        } catch (_: PackageManager.NameNotFoundException) {
+            ReelApps.NAMES[pkg] ?: pkg
+        }
     }
+
+    /** Icon from the picker's cache when it's there (rendering one takes a while). */
+    fun cachedIcon(context: Context, pkg: String): ByteArray? =
+        iconCache[pkg]?.second ?: appIcon(context, pkg)
 
     /** App icon as PNG bytes, or null. */
     fun appIcon(context: Context, pkg: String, sizePx: Int = 96): ByteArray? = try {

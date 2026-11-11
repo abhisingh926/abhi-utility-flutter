@@ -19,7 +19,6 @@ import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.os.SystemClock
 import android.util.Log
 import kotlin.math.sqrt
 
@@ -46,6 +45,9 @@ class ShakeService : Service(), SensorEventListener {
         private const val MAX_JERK_GAP_MS = 400L
 
         private const val COOLDOWN_MS = 1500L
+
+        /** Motion samples may be delivered up to this late, in batches (saves battery). */
+        private const val MAX_BATCH_US = 300_000
         private const val TAG = "ShakeService"
 
         @Volatile
@@ -109,7 +111,10 @@ class ShakeService : Service(), SensorEventListener {
                     ?.also { linearSensor = true }
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
                     ?.also { linearSensor = false }
-            motion?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+            // Samples are batched for up to 300 ms: with the screen off the CPU then wakes a
+            // few times a second instead of for every sample (~50/s). A shake lasts longer
+            // than that, so it is still caught, at most ~0.3 s later.
+            motion?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, MAX_BATCH_US) }
             sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)?.let {
                 proximityMax = it.maximumRange
                 sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
@@ -175,7 +180,7 @@ class ShakeService : Service(), SensorEventListener {
                 Log.d(TAG, "proximity=${event.values[0]} covered=$proximityCovered")
                 if (proximityCovered) resetJerks()
             }
-            else -> onMotion(event.values)
+            else -> onMotion(event.values, event.timestamp / 1_000_000)
         }
     }
 
@@ -184,7 +189,7 @@ class ShakeService : Service(), SensorEventListener {
      * A drop on the bed or a bump in a pocket is a single jolt (plus a weaker
      * bounce), so it never reaches [JERKS_NEEDED].
      */
-    private fun onMotion(values: FloatArray) {
+    private fun onMotion(values: FloatArray, sampleMs: Long) {
         val a = FloatArray(3)
         if (linearSensor) {
             values.copyInto(a, endIndex = 3)
@@ -196,7 +201,9 @@ class ShakeService : Service(), SensorEventListener {
             }
         }
 
-        val now = SystemClock.elapsedRealtime()
+        // When the sample was taken (same clock as elapsedRealtime). Samples arrive in
+        // batches (MAX_BATCH_US), so the time they arrive says nothing about the gaps.
+        val now = sampleMs
         if (proximityCovered || now - lastShake < COOLDOWN_MS) return
         if (jerkCount > 0 && now - lastJerkTime > MAX_JERK_GAP_MS) resetJerks()
 

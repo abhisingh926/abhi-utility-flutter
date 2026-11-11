@@ -10,13 +10,43 @@ class ApkApp {
         size = (m['size'] as num?)?.toInt() ?? 0,
         split = m['split'] as bool? ?? false,
         system = m['system'] as bool? ?? false,
-        updated = (m['updated'] as num?)?.toInt() ?? 0,
-        icon = m['icon'] as Uint8List?;
+        updated = (m['updated'] as num?)?.toInt() ?? 0;
 
   final String pkg, label, version;
   final int size, updated;
   final bool split, system;
-  final Uint8List? icon;
+}
+
+/// App icon, fetched from the native side the first time its row is built and
+/// cached for the rest of the session (so the list itself opens instantly).
+class _AppIcon extends StatelessWidget {
+  const _AppIcon(this.pkg, {this.size = 44});
+
+  final String pkg;
+  final double size;
+
+  static const _channel = MethodChannel('abhi_utility/apk');
+  static final Map<String, Future<Uint8List?>> _cache = {};
+
+  static Future<Uint8List?> _load(String pkg) =>
+      _channel.invokeMethod<Uint8List>('icon', {'pkg': pkg}).catchError((_) => null);
+
+  @override
+  Widget build(BuildContext context) {
+    final future = _cache.putIfAbsent(pkg, () => _load(pkg));
+    return SizedBox.square(
+      dimension: size,
+      child: FutureBuilder<Uint8List?>(
+        future: future,
+        builder: (context, snap) {
+          final bytes = snap.data;
+          if (bytes != null) return Image.memory(bytes, width: size, height: size, gaplessPlayback: true);
+          if (snap.connectionState != ConnectionState.done) return const SizedBox();
+          return Icon(Icons.android, size: size);
+        },
+      ),
+    );
+  }
 }
 
 enum _Sort { name, size, recent }
@@ -38,21 +68,39 @@ class ApkExtractorPageState extends State<ApkExtractorPage> {
   _Sort _sort = _Sort.name;
   String _query = '';
 
-  /// Loads the list the first time the tab is opened (not at app start).
-  void refresh() {
-    if (_apps == null) _load();
+  /// The page is only built when its tab is first opened (not at app start), so
+  /// loading here is lazy. (refresh() alone missed that first visit: the tab calls it
+  /// in the same frame the page is created, before this state exists, which left
+  /// the spinner up until the tab was opened a second time.)
+  @override
+  void initState() {
+    super.initState();
+    _load();
   }
 
+  void refresh() {
+    if (_apps == null && !_loading) _load();
+  }
+
+  bool _loading = false;
+
   Future<void> _load() async {
-    setState(() {
-      _apps = null;
-      _error = null;
-    });
+    _loading = true;
+    // Back to the spinner. Nothing to clear on the first load, which runs in
+    // initState, where setState isn't allowed.
+    if (_apps != null || _error != null) {
+      setState(() {
+        _apps = null;
+        _error = null;
+      });
+    }
     try {
       final raw = await _channel.invokeListMethod<Map>('list', {'system': _system}) ?? [];
       if (mounted) setState(() => _apps = raw.map(ApkApp.fromMap).toList());
     } on PlatformException catch (e) {
       if (mounted) setState(() => _error = e.message ?? 'Could not list apps');
+    } finally {
+      _loading = false;
     }
   }
 
@@ -61,10 +109,6 @@ class ApkExtractorPageState extends State<ApkExtractorPage> {
     if (bytes >= 1 << 20) return '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
     return '${(bytes / 1024).ceil()} KB';
   }
-
-  Widget _icon(Uint8List? bytes, {double size = 44}) => bytes == null
-      ? Icon(Icons.android, size: size)
-      : Image.memory(bytes, width: size, height: size, gaplessPlayback: true);
 
   /// action: share | save | open
   Future<void> _export(ApkApp app, String action) async {
@@ -109,7 +153,7 @@ class ApkExtractorPageState extends State<ApkExtractorPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: _icon(app.icon, size: 48),
+              leading: _AppIcon(app.pkg, size: 48),
               title: Text(app.label, style: const TextStyle(fontWeight: FontWeight.w600)),
               subtitle: Text('${app.pkg}\n'
                   '${app.version.isEmpty ? '' : 'v${app.version} · '}${formatSize(app.size)}'),
@@ -233,7 +277,7 @@ class ApkExtractorPageState extends State<ApkExtractorPage> {
                           }
                           final a = shown[i - 1];
                           return ListTile(
-                            leading: _icon(a.icon),
+                            leading: _AppIcon(a.pkg),
                             title: Text(a.label, maxLines: 1, overflow: TextOverflow.ellipsis),
                             subtitle: Text(
                               '${a.version.isEmpty ? '' : 'v${a.version} · '}${formatSize(a.size)}'
