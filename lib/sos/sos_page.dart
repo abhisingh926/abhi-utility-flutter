@@ -65,6 +65,7 @@ class SosPageState extends State<SosPage> {
   bool _on = false;
   bool _permissions = false;
   bool _service = false;
+  bool _mouseKeys = false;
   bool _active = false;
   bool _drawing = false; // finger on the practice pad: don't scroll
   bool _smsLocation = false;
@@ -109,6 +110,7 @@ class SosPageState extends State<SosPage> {
       _on = s['on'] as bool;
       _permissions = s['permissions'] as bool;
       _service = s['service'] as bool;
+      _mouseKeys = s['mouseKeys'] as bool? ?? false;
       _active = s['active'] as bool;
       _contacts = [for (final m in (s['contacts'] as List)) SosContact.fromMap(m as Map)];
       _smsLocation = s['smsLocation'] as bool? ?? false;
@@ -292,6 +294,14 @@ class SosPageState extends State<SosPage> {
               text: 'The Abhi Utility accessibility service is off. SOS needs it to work on the lock screen.',
               button: 'Turn on',
               onPressed: () => openAccessibilityWithConsent(context),
+            ),
+          if (_mouseKeys)
+            _Warning(
+              text: 'Android\'s "Mouse keys" is on. On this phone it can freeze the whole phone right after an SOS '
+                  '("not responding – Wait / Close app"). Turn it off in Accessibility unless you use a keyboard '
+                  'to move the pointer (Interaction and dexterity, or Physical keyboard → Mouse keys).',
+              button: 'Open settings',
+              onPressed: () => _channel.invokeMethod('openAccessibilitySettings'),
             ),
           if (!_permissions)
             _Warning(

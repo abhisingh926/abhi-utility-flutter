@@ -42,8 +42,8 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // Phone CPUs only (drops x86 emulator libraries to keep the APK small).
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        // Phone CPUs only: x86 libraries are left out in packaging {} below (an ndk
+        // abiFilters here would clash with flutter build apk --split-per-abi).
     }
 
     buildFeatures { buildConfig = true }
@@ -71,6 +71,9 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // abiFilters above is merged with Flutter's own list, so the OpenVPN / speed-test
+            // libraries still came in for x86 (emulators only, ~29 MB). Leave them out.
+            excludes += listOf("lib/x86/**", "lib/x86_64/**")
         }
     }
 

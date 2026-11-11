@@ -200,7 +200,8 @@ class ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
           SettingRow(
             icon: Icons.picture_in_picture_alt_rounded,
             title: 'Counter on top of apps',
-            subtitle: 'Reels and minutes today, while you scroll',
+            subtitle: 'Reels and minutes today, while you scroll. Drag to move it; drag it to ✕ to hide it '
+                'there (it keeps counting).',
             trailing: Switch(
               value: _overlayEnabled,
               onChanged: (v) async {

@@ -376,7 +376,8 @@ class DownloaderPageState extends State<DownloaderPage> with WidgetsBindingObser
                 SwitchListTile(
                   secondary: const Icon(Icons.download_for_offline_outlined),
                   title: const Text('Show ⬇ button while a video plays'),
-                  subtitle: const Text('In browsers and social apps. Copy the link, then tap ⬇.'),
+                  subtitle: const Text('In browsers and social apps. Copy the link, then tap ⬇. '
+                      'Drag to move it; drag it to ✕ to hide it in that app.'),
                   value: _bubble,
                   onChanged: (v) async {
                     await channel.invokeMethod('setBubbleEnabled', {'enabled': v});

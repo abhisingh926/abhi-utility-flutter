@@ -235,6 +235,10 @@ class MainActivity : FlutterFragmentActivity() {
         MethodChannel(messenger, "abhi_utility/sos").setMethodCallHandler { call, result ->
             when (call.method) {
                 "status" -> result.success(sosStatus())
+                "openAccessibilitySettings" -> {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    result.success(null)
+                }
                 // SOS history (SosHistory.kt): every SOS, its calls, location SMS and recording.
                 "history" -> result.success(SosHistory.list(this))
                 "clearHistory" -> {
@@ -670,7 +674,19 @@ class MainActivity : FlutterFragmentActivity() {
         "smsLocationPermissions" to Sos.missing(this, Sos.LOCATION_SMS_PERMISSIONS).isEmpty(),
         "recordPermissions" to Sos.missing(this, Sos.RECORD_PERMISSIONS).isEmpty(),
         "uploadUserId" to Sos.upload(this)?.userId,
+        "mouseKeys" to mouseKeysOn(),
     )
+
+    /**
+     * Android's "Mouse keys" accessibility feature. On Samsung (Android 17) it froze the whole
+     * phone ("Android isn't responding – Wait / Close") right after an SOS; the SOS page asks
+     * the user to turn it off. Read-only: the app never changes it.
+     */
+    private fun mouseKeysOn(): Boolean = try {
+        Settings.Secure.getInt(contentResolver, "accessibility_mouse_keys_enabled", 0) == 1
+    } catch (_: Exception) {
+        false
+    }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)

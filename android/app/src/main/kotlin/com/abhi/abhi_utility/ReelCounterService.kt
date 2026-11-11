@@ -163,6 +163,14 @@ class ReelCounterService : AccessibilityService() {
     private var anyForegroundPkg: String? = null
     private var mediaPlaying = false
     private var bubbleView: TextView? = null
+    private var bubbleDrag: FloatingDrag? = null
+
+    /**
+     * Apps where the user dragged the ⬇ button / reel counter onto the ✕: hidden there
+     * until another app is opened (like closing a chat head). Counting goes on.
+     */
+    private var bubbleHiddenIn: String? = null
+    private var counterHiddenIn: String? = null
     private var audioManager: AudioManager? = null
 
     private val audioCallback = object : AudioManager.AudioPlaybackCallback() {
@@ -275,6 +283,7 @@ class ReelCounterService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var overlay: TextView? = null
     private var expandedUntil = 0L
+    private var overlayDrag: FloatingDrag? = null
 
     // App lock.
     private var lockRules: Map<String, AppLock.Rule> = emptyMap()
@@ -373,6 +382,7 @@ class ReelCounterService : AccessibilityService() {
         (mediaPlaying || anyForegroundPkg in WHATSAPP_APPS) &&
             anyForegroundPkg in DOWNLOAD_BUBBLE_APPS &&
             blockedPkg == null && pinView == null &&
+            anyForegroundPkg != bubbleHiddenIn &&
             Downloads.bubbleEnabled(this)
 
     private fun updateBubble() {
@@ -401,8 +411,9 @@ class ReelCounterService : AccessibilityService() {
                 setColor(Color.argb(215, 20, 20, 40))
                 setStroke(dp(2f), Color.rgb(0, 200, 120))
             }
-            contentDescription = "Download this video with Abhi Utility"
-            setOnClickListener {
+            contentDescription = "Download this video with Abhi Utility. Drag to move, drag to ✕ to remove."
+        }
+        val onTap = {
                 if (anyForegroundPkg in WHATSAPP_APPS) {
                     // WhatsApp statuses have no link: open the Status Saver.
                     startActivity(
@@ -422,7 +433,6 @@ class ReelCounterService : AccessibilityService() {
                             .putExtra(QuickDownloadActivity.EXTRA_SOURCE_APP, appLabel(source))
                     )
                 }
-            }
         }
         val size = dp(42f)
         val params = WindowManager.LayoutParams(
@@ -432,14 +442,18 @@ class ReelCounterService : AccessibilityService() {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = dp(10f)
-            y = statusBarHeight() + dp(40f) // just below the reel counter
-        }
+        )
+        FloatingDrag.place(this, params, "download", statusBarHeight() + dp(40f)) // default: below the reel counter
+        val drag = FloatingDrag(this, wm, view, params, "download", onTap = onTap, onRemove = {
+            bubbleHiddenIn = anyForegroundPkg
+            hideBubble()
+            Toast.makeText(this, "Download button hidden. It comes back when you open this app again.", Toast.LENGTH_SHORT).show()
+        })
+        view.setOnTouchListener(drag)
         try {
             wm.addView(view, params)
             bubbleView = view
+            bubbleDrag = drag
         } catch (e: Exception) {
             Log.w(TAG, "Could not show download button", e)
         }
@@ -478,6 +492,8 @@ class ReelCounterService : AccessibilityService() {
     }
 
     private fun hideBubble() {
+        bubbleDrag?.cancel()
+        bubbleDrag = null
         bubbleView?.let {
             try {
                 windowManager?.removeView(it)
@@ -513,6 +529,11 @@ class ReelCounterService : AccessibilityService() {
             if (active !in IGNORED_PACKAGES && !fingerprintBusy()) setForeground(active)
             // Includes this app itself, so the ⬇ button hides when Abhi Utility opens.
             if (active != "com.android.systemui") {
+                // Another app opened: removed bubbles come back next time.
+                if (active != packageName && active !in IGNORED_PACKAGES) {
+                    if (active != bubbleHiddenIn) bubbleHiddenIn = null
+                    if (active != counterHiddenIn) counterHiddenIn = null
+                }
                 anyForegroundPkg = active
                 updateBubble()
             }
@@ -1232,7 +1253,7 @@ class ReelCounterService : AccessibilityService() {
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics).toInt()
 
     private fun showOverlay() {
-        if (!ReelStats.isOverlayEnabled(this)) {
+        if (!ReelStats.isOverlayEnabled(this) || fgPkg == counterHiddenIn) {
             hideOverlay()
             return
         }
@@ -1250,24 +1271,34 @@ class ReelCounterService : AccessibilityService() {
                     setStroke(dp(1f), Color.argb(120, 0, 200, 255))
                 }
             }
-            val statusBarId = resources.getIdentifier("status_bar_height", "dimen", "android")
-            val statusBar = if (statusBarId > 0) resources.getDimensionPixelSize(statusBarId) else dp(28f)
+            view.contentDescription = "Reel counter. Tap for today's details, drag to move, drag to ✕ to remove."
+            // Touchable now (it used to let touches through), so it can be moved off whatever
+            // it covers, tapped for details, or removed.
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.END
-                x = dp(8f)
-                y = statusBar + dp(4f)
-            }
+            )
+            FloatingDrag.place(this, params, "reels", statusBarHeight() + dp(4f))
+            val drag = FloatingDrag(this, wm, view, params, "reels",
+                onTap = {
+                    expandedUntil = SystemClock.elapsedRealtime() + EXPANDED_MS
+                    updateOverlay()
+                },
+                onRemove = {
+                    counterHiddenIn = fgPkg
+                    hideOverlay()
+                    Toast.makeText(this, "Reel counter hidden. Still counting; it comes back when you open this app again.", Toast.LENGTH_SHORT).show()
+                })
+            view.setOnTouchListener(drag)
             try {
                 wm.addView(view, params)
                 overlay = view
+                overlayDrag = drag
             } catch (e: Exception) {
                 Log.w(TAG, "Could not show overlay", e)
                 return
@@ -1280,7 +1311,7 @@ class ReelCounterService : AccessibilityService() {
         val view = overlay ?: return
         val pkg = fgPkg ?: return
         if (pkg !in reelApps || blockedPkg != null) return
-        if (!ReelStats.isOverlayEnabled(this)) {
+        if (!ReelStats.isOverlayEnabled(this) || pkg == counterHiddenIn) {
             hideOverlay()
             return
         }
@@ -1302,6 +1333,8 @@ class ReelCounterService : AccessibilityService() {
     }
 
     private fun hideOverlay() {
+        overlayDrag?.cancel()
+        overlayDrag = null
         overlay?.let {
             try {
                 windowManager?.removeView(it)
